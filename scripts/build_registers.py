@@ -153,8 +153,8 @@ def trace_notes(c, rec):
         out.append(f'        <note type="reconciliation-confidence">{rec["match_confidence"]}</note>')
     if rec and rec.get("wikidata_alts"):
         out.append(f'        <note type="wikidata-candidates">{esc("|".join(rec["wikidata_alts"]))}</note>')
-    # UUID NER fusionnes -> tracabilite + base du mapping
-    out.append(f'        <note type="ner-ids">{esc("|".join(c["ner_ids"]))}</note>')
+    # NB : la tracabilite UUID NER -> id registre vit dans id_mapping.csv (genere
+    # plus bas), pas dans une note interne (UUID inutiles a l'affichage, redondants).
     return out
 
 def idnos(rec, extra=()):
