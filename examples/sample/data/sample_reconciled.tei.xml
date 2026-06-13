@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Tiny synthetic fixture exercising all 9 entity types of the pipeline.
+     NOT real corpus data. Entities are deliberately well-known so the optional
+     Wikidata reconciliation test has something plausible to match. -->
+<TEI xmlns="http://www.tei-c.org/ns/1.0">
+  <teiHeader>
+    <fileDesc>
+      <titleStmt><title>Sample document</title></titleStmt>
+      <publicationStmt><p>Synthetic test fixture.</p></publicationStmt>
+      <sourceDesc><p>Hand-written for tests.</p></sourceDesc>
+    </fileDesc>
+  </teiHeader>
+  <standOff>
+    <listPerson>
+      <person xml:id="pers-0001"><persName>Platon</persName></person>
+      <person xml:id="pers-0002"><persName>Aristote</persName></person>
+    </listPerson>
+    <listPlace>
+      <place xml:id="place-0001"><placeName>Athenes</placeName></place>
+    </listPlace>
+    <listOrg>
+      <org xml:id="org-0001"><orgName>Academie</orgName></org>
+    </listOrg>
+    <listBibl>
+      <bibl xml:id="work-0001"><title>Timee</title></bibl>
+    </listBibl>
+    <listEvent>
+      <event xml:id="event-0001"><label>Concile</label></event>
+    </listEvent>
+    <listObject>
+      <object xml:id="artwork-0001"><objectName>la Joconde</objectName></object>
+    </listObject>
+  </standOff>
+  <text>
+    <body>
+      <p>
+        <persName ref="#pers-0001">Platon</persName> fonda
+        l'<orgName ref="#org-0001">Academie</orgName> a
+        <placeName ref="#place-0001">Athenes</placeName>. Son disciple
+        <persName ref="#pers-0002">Aristote</persName> commenta le
+        <title ref="#work-0001">Timee</title> de
+        <persName ref="#pers-0001">Platon</persName>.
+      </p>
+      <p>
+        On y evoque le <rs type="event" ref="#event-0001">Concile</rs>, une
+        <rs type="technique" ref="#tech-0001">fresque</rs> en
+        <material ref="#mat-0001">marbre</material>, datee de
+        <date ref="#date-0001">1508</date>, ainsi que
+        <objectName ref="#artwork-0001">la Joconde</objectName>.
+      </p>
+      <p>
+        Reference non reconciliee a conserver telle quelle :
+        <persName ref="#pers-9999">Inconnu</persName>.
+      </p>
+    </body>
+  </text>
+</TEI>

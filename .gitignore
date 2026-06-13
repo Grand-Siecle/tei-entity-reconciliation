@@ -1,0 +1,19 @@
+# Input corpus and generated registers (large / produced, not source)
+data/*.xml
+data/**/*.xml
+data/**/*.csv
+!examples/**
+
+# Intermediate artifacts + Wikidata cache
+build/
+
+# Python
+__pycache__/
+*.pyc
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+*:Zone.Identifier
