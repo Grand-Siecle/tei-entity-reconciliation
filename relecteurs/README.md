@@ -28,4 +28,4 @@ Les règles de décision (quand accepter, corriger, rejeter, fusionner, supprime
 
 ## Pour le responsable technique
 
-Le reste du dépôt documente la chaîne complète (extraction, réconciliation, registres, lots, import) : voir le [README principal](../README.md) et [`docs/workflow.fr.md`](../docs/workflow.fr.md). Pour régénérer le PDF à partir du Markdown : `python3 relecteurs/build_pdf.py` (nécessite le module Python `markdown` et un Chromium headless, voir l'en-tête du script).
+Le reste du dépôt documente la chaîne complète (extraction, réconciliation, registres, lots, import) : voir le [README principal](../README.md) et [`docs/workflow.fr.md`](../docs/workflow.fr.md). Le PDF est une impression du Markdown ; si vous modifiez le guide, régénérez-le (par exemple en ouvrant le Markdown rendu dans un navigateur et en l'imprimant en PDF au format A4).

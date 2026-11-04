@@ -24,9 +24,8 @@ import os
 import re
 import sys
 import unicodedata
-from collections import defaultdict, Counter
+from collections import Counter
 
-TEI = "{http://www.tei-c.org/ns/1.0}"
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Surchargeables par variable d'env (defauts = layout du repo) :
 #   TEI_GLOB     : motif des fichiers TEI d'entree
@@ -63,7 +62,6 @@ LEADING = re.compile(
     re.IGNORECASE,
 )
 
-import ast
 
 def strip_diacritics(s):
     nfkd = unicodedata.normalize("NFKD", s)
