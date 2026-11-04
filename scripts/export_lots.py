@@ -16,6 +16,10 @@ ne remplace que les lots listes dans le manifeste precedent pour les types
 reecrits, et refuse (sauf --force) si l'un d'eux a ete modifie depuis son
 ecriture (mtime notee dans <out>/.lots_written.json) ou si un fichier cible
 existe sans figurer au manifeste.
+<out>/.lots_written.json (fichier technique : mtime de chaque lot a l'ecriture)
+peut etre supprime sans risque ; le controle se rabat alors sur la mtime du
+manifeste, moins fiable (un lot modifie avant une exportation d'un autre type
+n'est plus detecte).
 
 Les colonnes de decision sont pre-remplies depuis curation.csv (CURATION_CSV).
 

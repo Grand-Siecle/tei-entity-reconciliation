@@ -11,7 +11,8 @@ decision (voir decide_row) :
   3. `qid_final` (recette OpenRefine : "" = non touche, "AUCUN" = match
      rejete, QID = match retenu) : "" -> aucune information ; AUCUN ->
      corriger sans QID si un QID etait implique ; QID different du QID
-     implique -> corriger avec ce QID ; egal a qid_propose sans decision -> ok ;
+     implique -> corriger avec ce QID ; egal a qid_propose sans decision -> ok
+     (QID implique : qid_corrige si corriger, sinon qid_propose) ;
   4. decision explicite ok|corriger|doute (qid_corrige seul -> corriger) ;
   5. drapeau (`flagged`/`doute` vrai) -> doute ;
   6. `label_corrige`/`type_corrige`/`commentaire` seuls : ligne gardee,
@@ -107,8 +108,8 @@ def _decide(row, out):
         proposed = _qid(g("qid_propose"))
         if explicit == "corriger":
             implied = out["qid_corrige"]
-        elif explicit in ("ok", ""):
-            implied = proposed
+        elif explicit in ("ok", "doute", ""):
+            implied = proposed   # a proposal stands while in doubt
         else:
             implied = ""
         final = _qid(raw)

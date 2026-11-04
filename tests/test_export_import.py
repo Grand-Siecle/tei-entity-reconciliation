@@ -293,6 +293,17 @@ class TestImport(Base):
             "qid_final": "Q1"})
         self.assertEqual(d["decision"], "ok")
 
+    def test_decide_doute_keeps_when_qid_final_agrees(self):
+        base = {"id": "p", "decision": "doute", "qid_propose": "Q1"}
+        d = import_curation.decide_row(dict(base, qid_final="Q1"))
+        self.assertEqual(d["decision"], "doute")
+        d = import_curation.decide_row(dict(base, qid_final=""))
+        self.assertEqual(d["decision"], "doute")
+        d = import_curation.decide_row(dict(base, qid_final="AUCUN"))
+        self.assertEqual((d["decision"], d["qid_corrige"]), ("corriger", ""))
+        d = import_curation.decide_row(dict(base, qid_final="Q7"))
+        self.assertEqual((d["decision"], d["qid_corrige"]), ("corriger", "Q7"))
+
     def test_decide_qid_final_url(self):
         d = import_curation.decide_row({
             "id": "p", "qid_propose": "Q1",
