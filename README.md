@@ -323,11 +323,13 @@ target, cycle…) never stop the build: they are reported.
    information; `AUCUN` = match rejected → `corriger` without QID (when a QID was
    implied); a QID different from the implied one → `corriger` with that QID; equal
    to `qid_propose` with no decision → `ok` **only if the judgement is explicit**:
-   no `qid_juge` column (spreadsheet), or `qid_juge` = `single` / `similar` (the
+   `qid_juge` = `single` / `similar` (the
    reviewer picked the candidate by hand; the start recipe matches every proposal
    in mass, `qid_juge` = `mass`), **or** the lot is declared complete
    (`--lot-complet`, or `complet` in the file name) and `confiance` is `high` or
-   `medium`; otherwise no decision;
+   `medium`; otherwise no decision. A file exported with an older end recipe (a
+   `qid_final` column but no `qid_juge`) therefore needs `_complet` or explicit
+   decisions; a plain spreadsheet has no `qid_final` and uses step 5;
 5. explicit `ok` / `corriger` / `doute` (`qid_corrige` alone → `corriger`);
 6. only `label_corrige` / `type_corrige` / `commentaire` → row kept, empty decision.
 
@@ -337,7 +339,7 @@ non-empty `label_corrige` (across all imported files) are **merged** into the on
 the most mentions (`fusionner` → that id), unless they carry an explicit decision; a
 row with an empty `label_corrige` joins such a group when its own `label` equals the
 group's `label_corrige`. When an id appears in several files, the last row carrying a
-decision wins (a row with nothing decided does not override) and a warning lists those
+non-empty decision wins (a row without one never overrides it) and a warning lists those
 ids. A new row replaces the **whole** existing curation row with the same id: a
 reviewer file without the `label_corrige` / `type_corrige` / `commentaire` columns
 therefore clears earlier values of those columns. Re-importing an unchanged pre-filled

@@ -552,11 +552,13 @@ est `corriger`, sinon `qid_propose`.
    aucune information ; `AUCUN` = match rejete → `corriger` sans QID (si un QID etait
    implique) ; QID different du QID implique → `corriger` avec ce QID ; egal a
    `qid_propose` sans decision → `ok` **seulement si le jugement est explicite** :
-   pas de colonne `qid_juge` (tableur), ou `qid_juge` = `single` / `similar` (le
+   `qid_juge` = `single` / `similar` (le
    relecteur a coche le candidat a la main ; la recette de debut apparie toutes les
    propositions en masse, `qid_juge` = `mass`), **ou** lot declare complet
    (`--lot-complet`, ou `complet` dans le nom du fichier) et `confiance` `high` ou
-   `medium` ; sinon aucune decision ;
+   `medium` ; sinon aucune decision. Un fichier exporte avec une ancienne recette de
+   fin (colonne `qid_final` sans `qid_juge`) demande donc `_complet` ou des decisions
+   explicites ; un simple tableur n'a pas de `qid_final` et passe par l'etape 5 ;
 5. decision explicite `ok` / `corriger` / `doute` (`qid_corrige` seul → `corriger`) ;
 6. seulement `label_corrige` / `type_corrige` / `commentaire` → ligne gardee,
    decision vide.
@@ -567,8 +569,8 @@ partageant un `label_corrige` non vide (sur l'ensemble des fichiers importes) so
 **fusionnees** dans celle qui a le plus de mentions (`fusionner` → son id), sauf
 decision explicite ; une ligne au `label_corrige` vide rejoint ce groupe quand son
 propre `label` est egal a ce `label_corrige`. Un id present dans plusieurs fichiers :
-la derniere ligne portant une decision l'emporte (une ligne sans decision ne remplace
-rien) et un avertissement liste ces ids. Une nouvelle ligne remplace **toute** la
+la derniere ligne portant une decision non vide l'emporte (une ligne sans decision
+ne la remplace jamais) et un avertissement liste ces ids. Une nouvelle ligne remplace **toute** la
 ligne de `curation.csv` de meme id : un fichier de relecteur sans les colonnes
 `label_corrige` / `type_corrige` / `commentaire` efface donc leurs valeurs
 anterieures. Re-importer tel quel un lot pre-rempli garde `qui` / `date` / `source`

@@ -347,10 +347,25 @@ class TestImport(Base):
             "qid_final": "https://www.wikidata.org/wiki/Q42"})
         self.assertEqual((d["decision"], d["qid_corrige"]), ("corriger", "Q42"))
 
-    def test_decide_qid_final_equal_is_ok(self):
-        d = import_curation.decide_row({"id": "p", "type": "person",
-                                        "qid_propose": "Q1", "qid_final": "Q1"})
-        self.assertEqual(d["decision"], "ok")
+    def test_decide_qid_final_equal_without_qid_juge_is_untouched(self):
+        # export of an older end recipe (no qid_juge): not a judgement
+        row = {"id": "p", "type": "person", "qid_propose": "Q1",
+               "qid_final": "Q1", "confiance": "high"}
+        self.assertIsNone(import_curation.decide_row(row))
+        d = import_curation.decide_row(row, complete=True)
+        self.assertEqual((d["decision"], d["qid_corrige"]), ("ok", "Q1"))
+        self.assertIsNone(import_curation.decide_row(
+            dict(row, confiance="low"), complete=True))
+
+    def test_decide_explicit_rejudgement_replaces_stale_accepted_qid(self):
+        # pre-filled ok/Q1 from curation.csv, proposal now Q2, picked by hand
+        row = {"id": "p", "decision": "ok", "qid_corrige": "Q1",
+               "qid_propose": "Q2", "qid_final": "Q2", "qid_juge": "single"}
+        d = import_curation.decide_row(row)
+        self.assertEqual((d["decision"], d["qid_corrige"]), ("ok", "Q2"))
+        # left as is (mass): the stale QID stays, the build keeps reporting
+        d = import_curation.decide_row(dict(row, qid_juge="mass"))
+        self.assertEqual((d["decision"], d["qid_corrige"]), ("ok", "Q1"))
 
     def test_decide_qid_final_differs_is_corriger(self):
         d = import_curation.decide_row({"id": "p", "type": "person",
@@ -430,10 +445,7 @@ class TestImport(Base):
             d = import_curation.decide_row(self.mass_row("low", qid_juge=how))
             self.assertEqual((d["decision"], d["qid_corrige"]), ("ok", "Q1"))
 
-    def test_decide_spreadsheet_without_qid_juge_is_ok(self):
-        d = import_curation.decide_row({"id": "p", "qid_propose": "Q1",
-                                        "qid_final": "Q1", "confiance": "low"})
-        self.assertEqual((d["decision"], d["qid_corrige"]), ("ok", "Q1"))
+    def test_decide_spreadsheet_explicit_ok(self):
         d = import_curation.decide_row({"id": "p", "decision": "ok",
                                         "qid_propose": "Q1"})
         self.assertEqual((d["decision"], d["qid_corrige"]), ("ok", "Q1"))
@@ -643,6 +655,26 @@ class TestImport(Base):
         self.assertEqual(cur["person-000002"]["decision"], "ok")
         self.assertIn("plusieurs fichiers", p.stdout)
         self.assertIn("person-000001, person-000002", p.stdout)
+
+    def test_cli_label_only_row_does_not_override_decision(self):
+        lot1 = self.write_lot([{"id": "person-000001", "type": "person",
+                                "decision": "supprimer"}], "a.csv")
+        lot2 = self.write_lot([{"id": "person-000001", "type": "person",
+                                "commentaire": "vu"}], "b.csv")
+        self.run_script("import_curation.py", lot1, lot2)
+        r = curation.load_curation(self.cur)["person-000001"]
+        self.assertEqual((r["decision"], r["commentaire"], r["source"]),
+                         ("supprimer", "", "a.csv"))
+
+    def test_cli_record_import_failure_is_a_warning(self):
+        lot = self.write_lot([{"id": "person-000001", "type": "person",
+                               "decision": "ok"}])
+        side = os.path.join(self.tmp, ".lots_written.json")
+        os.makedirs(side)          # sidecar path unwritable as a file
+        p = self.run_script("import_curation.py", lot)
+        self.assertIn("non notee", p.stdout)
+        self.assertEqual(curation.load_curation(self.cur)["person-000001"]
+                         ["decision"], "ok")
 
     def test_cli_lot_complet_flag_and_file_name(self):
         row = {"id": "person-000001", "type": "person", "qid_propose": "Q1",

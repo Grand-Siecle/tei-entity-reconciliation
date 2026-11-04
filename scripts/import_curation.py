@@ -17,9 +17,10 @@ de lot : colonnes qid_final, qid_juge, supprimer, doute). Ordre de decision
      decision est corriger, sinon qid_propose : "" -> aucune information ;
      AUCUN -> corriger sans QID si un QID etait implique ; QID different du
      QID implique -> corriger avec ce QID ; egal a qid_propose sans decision
-     -> ok seulement si le jugement est explicite : colonne `qid_juge` absente
-     (tableur) ou differente de ""/"mass" (OpenRefine : "single"/"similar" =
-     jugee a la main), OU lot declare complet (--lot-complet, ou "complet"
+     -> ok seulement si le jugement est explicite : colonne `qid_juge`
+     presente et differente de ""/"mass" (OpenRefine : "single"/"similar" =
+     jugee a la main ; sans qid_juge, ancienne recette = non touche), OU lot
+     declare complet (--lot-complet, ou "complet"
      dans le nom du fichier) et confiance high/medium ; sinon rien ;
   5. decision explicite ok|corriger|doute (qid_corrige seul -> corriger) ;
   6. `label_corrige`/`type_corrige`/`commentaire` seuls : ligne gardee,
@@ -31,7 +32,7 @@ l'ensemble des fichiers importes) sont fusionnees dans celle qui a le plus de
 mentions (sauf decision explicite) ; une ligne sans label_corrige rejoint le
 groupe dont le label_corrige est egal a son propre `label`.
 Un id present dans plusieurs fichiers : la derniere ligne portant une
-decision l'emporte (avertissement).
+decision non vide l'emporte (avertissement) ; sinon la derniere ligne.
 Apres l'ecriture, l'empreinte sha256 de chaque fichier importe est notee dans
 le .lots_written.json de son repertoire (garde-fou de export_lots.py).
 
@@ -116,11 +117,12 @@ def is_complete_file(path):
 
 
 def _judged(row):
-    """True when the reviewer judged qid_final explicitly: no `qid_juge`
-    column (spreadsheet), or an OpenRefine judgement other than the recipe's
-    mass match ("single" / "similar")."""
+    """True when the reviewer judged qid_final explicitly: the `qid_juge`
+    column exists and holds an OpenRefine judgement other than the recipe's
+    mass match ("single" / "similar"). Without `qid_juge` (export of an older
+    end recipe) a qid_final equal to the proposal counts as untouched."""
     if "qid_juge" not in row:
-        return True
+        return False
     return (row.get("qid_juge") or "").strip().lower() not in MASS_JUDGEMENTS
 
 
@@ -188,9 +190,13 @@ def decide_row(row, complete=False):
     if decision not in curation_mod.DECISIONS:
         raise ValueError("decision inconnue %r pour %s" % (decision, out["id"]))
     out["decision"] = _decide(row, out, complete)
-    if out["decision"] == "ok" and not out["qid_corrige"]:
-        out["qid_corrige"] = _qid(row.get("qid_final")) \
-            or _qid(row.get("qid_propose"))
+    if out["decision"] == "ok":
+        final = _qid(row.get("qid_final"))
+        if final and _judged(row):
+            # an explicit re-judgement replaces a stale pre-filled QID
+            out["qid_corrige"] = final
+        elif not out["qid_corrige"]:
+            out["qid_corrige"] = final or _qid(row.get("qid_propose"))
     if out["decision"] or out["label_corrige"] or out["type_corrige"] \
             or out["commentaire"]:
         return out
@@ -332,8 +338,9 @@ def main(argv=None):
                 print("AVERTISSEMENT : %s (%s) ligne ignoree" % (e, path))
                 errors += 1
                 continue
-            if d is None and rid in decided_by_id:
-                continue
+            prev = decided_by_id.get(rid)
+            if prev and prev["decision"] and not (d and d["decision"]):
+                continue   # only a row with a real decision overrides one
             rows_by_id[rid] = r
             source_of[rid] = path
             decided_by_id[rid] = d
@@ -377,7 +384,12 @@ def main(argv=None):
     curation_mod.save_curation(a.curation, cur)
     print("%d entree(s) mises a jour -> %s" % (changed, a.curation))
     for path in a.files:
-        export_lots.record_import(path)
+        try:
+            export_lots.record_import(path)
+        except OSError as e:
+            print("AVERTISSEMENT : empreinte de %s non notee (%s) ; "
+                  "curation.csv est bien ecrit, mais une nouvelle exportation "
+                  "de ce lot demandera --force" % (path, e))
     return 0
 
 
