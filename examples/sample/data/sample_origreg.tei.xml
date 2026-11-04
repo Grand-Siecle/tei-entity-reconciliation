@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Synthetic fixture mimicking the real corpus shape: NER mentions inside
+     <choice><orig><s>, modernized copies in <reg>, @cert, split words (w/@part),
+     root xml:id, header author with local PERS id. NOT real corpus data. -->
+<TEI xmlns="http://www.tei-c.org/ns/1.0" xml:id="SAMPLE2">
+  <teiHeader>
+    <fileDesc>
+      <titleStmt>
+        <title>Sample orig/reg document</title>
+        <author ref="#PERS0001">Jean Du Bray</author>
+      </titleStmt>
+      <publicationStmt><p>Synthetic test fixture.</p></publicationStmt>
+      <sourceDesc><p>Hand-written for tests.</p></sourceDesc>
+    </fileDesc>
+    <profileDesc>
+      <particDesc>
+        <listPerson>
+          <person xml:id="PERS0001">
+            <persName><forename>Jean</forename> <surname>Du Bray</surname></persName>
+            <idno type="isni">0000000121296144</idno>
+            <idno type="ark">ark:/12148/cb12229894r</idno>
+          </person>
+        </listPerson>
+      </particDesc>
+    </profileDesc>
+  </teiHeader>
+  <text>
+    <body>
+      <p>
+        <choice>
+          <orig>
+            <s xml:id="s_1">
+              <w>AD</w>
+              <persName resp="#ner-auto" cert="high" ref="#pers-aaaa0001" xml:id="pers-aaaa0001-m1"><w>IOANNEM</w>
+                <w>DV</w>
+                <w>BRAY</w></persName>
+              <pc join="left">.</pc>
+            </s>
+          </orig>
+          <reg type="modernized" resp="#modernize-auto" cert="high">À <persName ref="#pers-aaaa0001">JOANNEM DU BRAY</persName>.</reg>
+        </choice>
+        <choice>
+          <orig>
+            <s xml:id="s_2">
+              <w>Dixit</w>
+              <persName resp="#ner-auto" cert="medium" ref="#pers-aaaa0001" xml:id="pers-aaaa0001-m2"><w>IOANNES</w>
+                <w>DV</w>
+                <w>BRAY</w></persName>
+            </s>
+          </orig>
+          <reg type="modernized" resp="#modernize-auto" cert="high">Dixit <persName ref="#pers-aaaa0001">JOANNEM DU BRAY</persName></reg>
+        </choice>
+        <choice>
+          <orig>
+            <s xml:id="s_3">
+              <w>vir</w>
+              <persName resp="#ner-auto" cert="medium" ref="#pers-bbbb0002" xml:id="pers-bbbb0002-m1"><w part="I">Lepi</w>
+                <w part="F">dus</w></persName>
+              <w>fuit</w>
+            </s>
+          </orig>
+          <reg type="modernized" resp="#modernize-auto" cert="high">vir <persName ref="#pers-bbbb0002">Lepidus</persName> fuit</reg>
+        </choice>
+        <choice>
+          <orig>
+            <s xml:id="s_4">
+              <w>ex</w>
+              <material resp="#ner-auto" ref="#mat-cccc0003" xml:id="mat-cccc0003-m1" cert="high"><w>MARMORE</w></material>
+            </s>
+          </orig>
+          <reg type="modernized" resp="#modernize-auto" cert="high">ex marmore</reg>
+        </choice>
+      </p>
+    </body>
+  </text>
+  <standOff>
+    <listPerson>
+      <person xml:id="pers-aaaa0001" cert="high"><persName>Ioannes Brali</persName></person>
+      <person xml:id="pers-bbbb0002" cert="medium"><persName>Lepidus</persName></person>
+    </listPerson>
+    <listPlace/>
+    <linkGrp type="mentions">
+      <link target="#pers-aaaa0001 #pers-aaaa0001-m1"/>
+      <link target="#pers-aaaa0001 #pers-aaaa0001-m2"/>
+      <link target="#pers-bbbb0002 #pers-bbbb0002-m1"/>
+    </linkGrp>
+  </standOff>
+</TEI>
