@@ -116,6 +116,32 @@ class IdRegistryTest(unittest.TestCase):
         with open(self.path, encoding="utf-8") as f:
             self.assertIn("person,a,person-000001,active,u1", f.read())
 
+    def test_remark_to_same_status_keeps_updated(self):
+        r = IdRegistry(self.path, today="2026-01-01")
+        r.load()
+        a = r.assign("person", "a", ["u1"])
+        r.mark(a, "deleted")
+        r.save()
+        with open(self.path, encoding="utf-8") as f:
+            before = f.read()
+        # next build: the key is reactivated, then curation deletes it again
+        r2 = IdRegistry(self.path, today="2026-11-04")
+        r2.load()
+        self.assertEqual(r2.assign_all([("person", "a", ["u1"])]), [a])
+        r2.mark(a, "deleted")
+        r2.save()
+        with open(self.path, encoding="utf-8") as f:
+            self.assertEqual(f.read(), before)
+        # a real change (merged instead of deleted) does bump `updated`
+        r3 = IdRegistry(self.path, today="2026-11-05")
+        r3.load()
+        r3.assign_all([("person", "a", ["u1"])])
+        r3.mark(a, "merged")
+        r3.save()
+        with open(self.path, encoding="utf-8") as f:
+            self.assertIn("person,a,person-000001,merged,u1,2026-01-01,2026-11-05",
+                          f.read())
+
     def test_type_prefix_unknown_raises(self):
         r = self.reg()
         with self.assertRaises(ValueError):

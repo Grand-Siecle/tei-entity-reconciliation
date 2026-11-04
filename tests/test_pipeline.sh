@@ -76,6 +76,12 @@ chk $([ $rc = 0 ] && [ -n "$PLATON" ] && [ "$P2" = "$PLATON" ] && echo 0 || echo
   "ids stable across corpus growth ($PLATON -> ${P2:-?})"
 
 # 6) curation overlay: supprimer / fusionner / label_corrige / doute
+# (steps 6-8 need the ids resolved above: stop here if they are missing)
+if [ -z "$PLATON" ] || [ -z "$ARISTOTE" ] || [ -z "$CONCILE" ] || [ -z "$ATHENES" ]; then
+  chk 1 "register ids resolved (Platon=${PLATON:-?} Aristote=${ARISTOTE:-?} Concile=${CONCILE:-?} Athenes=${ATHENES:-?})"
+  echo "  -> FAIL"
+  exit 1
+fi
 cat > "$CUR" <<EOF
 id,type,decision,qid_corrige,fusion_vers,label_corrige,type_corrige,commentaire,qui,date,source
 $CONCILE,event,supprimer,,,,,,test,2026-11-04,
@@ -87,7 +93,8 @@ build
 rc=$?
 ok=0
 [ $rc = 0 ] || ok=1
-grep -q "Concile" "$TMP/registers/events.xml" && ok=1
+[ -f "$TMP/registers/events.xml" ] || ok=1
+grep -q "Concile" "$TMP/registers/events.xml" 2>/dev/null && ok=1
 [ "$(regid pers-0002)" = "$PLATON" ] || ok=1
 grep -q "Platon (curé)" "$TMP/registers/persons.xml" || ok=1
 grep -Eq '<note type="curation"( resp="[^"]*")?>doute</note>' "$TMP/registers/places.xml" || ok=1

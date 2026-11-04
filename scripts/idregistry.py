@@ -34,9 +34,13 @@ class IdRegistry:
         self._rows = {}      # xml_id -> row (ner_ids as set)
         self._by_key = {}    # (type, label_norm) -> xml_id
         self._claimed = set()  # ids deja attribues pendant cette session
+        # ids reactives par _touch sans autre changement : (statut, updated)
+        # d'avant, restaures si mark() les remet dans leur statut d'origine
+        self._reactivated = {}
 
     def load(self):
         self._rows, self._by_key, self._claimed = {}, {}, set()
+        self._reactivated = {}
         if not os.path.exists(self.path):
             return
         with open(self.path, encoding="utf-8-sig", newline="") as f:
@@ -70,14 +74,25 @@ class IdRegistry:
         return set(self._rows)
 
     def mark(self, xml_id, status):
+        """Change le statut d'un id. Un id reactive par ce build (sans autre
+        changement) puis remis dans son statut d'origine (supprime / fusionne a
+        nouveau par la curation) retrouve sa date `updated` : pas de bruit dans
+        le diff git d'un fichier commite."""
         row = self._rows.get(xml_id)
-        if row is not None and row["status"] != status:
-            row["status"] = status
+        if row is None or row["status"] == status:
+            return
+        prev = self._reactivated.pop(xml_id, None)
+        row["status"] = status
+        if prev is not None and prev[0] == status:
+            row["updated"] = prev[1]
+        else:
             row["updated"] = self.today
 
     def _touch(self, row, ner_ids):
         new = set(ner_ids) - row["ner_ids"]
         if new or row["status"] != "active":
+            if not new:
+                self._reactivated[row["xml_id"]] = (row["status"], row["updated"])
             row["ner_ids"] |= new
             row["status"] = "active"
             row["updated"] = self.today

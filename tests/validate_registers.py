@@ -197,7 +197,10 @@ def main():
     ap.add_argument("--ignore-ref", default=r"^PERS\d+$",
                     help=r'refs (without #) matching this regex are not checked '
                          r'(default: ^PERS\d+$, header persons)')
-    ap.add_argument("--curation", help="curation.csv whose id / fusion_vers must exist")
+    ap.add_argument("--curation",
+                    help="curation.csv to check: every id is a register xml:id or "
+                         "in id_registry.csv, every fusion_vers a live register "
+                         "xml:id, every decision valid")
     a = ap.parse_args()
 
     print("validate_registers (%s):" % a.reg_dir)
