@@ -63,6 +63,40 @@ class IdRegistryTest(unittest.TestCase):
         self.assertEqual(r2.assign("person", "lomenie", ["u1"]), xid)
         self.assertNotEqual(r2.assign("person", "lomenie de brienne", ["u2"]), xid)
 
+    def test_assign_all_exact_key_beats_overlap(self):
+        r = self.reg()
+        self.assertEqual(r.assign("person", "lomenie", ["u1", "u2"]), "person-000001")
+        r.assign("person", "autre", ["u7"])
+        r.save()
+        r2 = self.reg()
+        ids = r2.assign_all([("person", "lomenie de brienne", ["u2", "u5"]),
+                             ("person", "lomenie", ["u1"])])
+        self.assertEqual(ids[1], "person-000001")
+        self.assertEqual(ids[0], "person-000003")
+
+    def test_overlap_ignores_deleted_and_merged_rows(self):
+        r = self.reg()
+        r.assign("person", "a", ["u1"])
+        bruit = r.assign("person", "bruit", ["u9"])
+        src = r.assign("person", "lomenius", ["u5"])
+        r.mark(bruit, "deleted")
+        r.mark(src, "merged")
+        r.save()
+        r2 = self.reg()
+        p = r2.assign("person", "platon", ["u9", "u10"])
+        q = r2.assign("person", "lomenie", ["u5"])
+        self.assertNotIn(p, (bruit, src))
+        self.assertNotIn(q, (bruit, src))
+
+    def test_exact_key_claimed_twice_raises(self):
+        r = self.reg()
+        r.assign("person", "a", ["u1"])
+        r.save()
+        r2 = self.reg()
+        r2.assign("person", "a", ["u1"])
+        with self.assertRaises(ValueError):
+            r2.assign("person", "a", ["u2"])
+
     def test_ids_never_reused_after_delete(self):
         r = self.reg()
         a = r.assign("person", "a", ["u1"])

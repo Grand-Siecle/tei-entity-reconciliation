@@ -178,6 +178,29 @@ class CurationTest(unittest.TestCase):
         self.assertEqual(m["rec"]["wikidata_qid"], "Q7")
         self.assertEqual(self.status(src["xmlid"]), "merged")
 
+    def test_fusion_into_deleted_target_skipped(self):
+        tgt = self.cl("person", "Lomenie", 5, ["u1"])
+        src = self.cl("person", "Lomenius", 2, ["u3"])
+        out, errs = self.apply([tgt, src], {
+            tgt["xmlid"]: row(tgt["xmlid"], decision="supprimer"),
+            src["xmlid"]: row(src["xmlid"], decision="fusionner", fusion_vers=tgt["xmlid"])})
+        self.assertEqual([c["xmlid"] for c in out], [src["xmlid"]])
+        self.assertEqual(out[0]["mentions"], 2)
+        self.assertEqual(len(errs), 1)
+        self.assertIn(tgt["xmlid"], errs[0])
+        self.assertEqual(self.status(src["xmlid"]), "active")
+
+    def test_cross_type_fusion_skipped(self):
+        tgt = self.cl("place", "Rome", 5, ["u1"])
+        src = self.cl("person", "Rome", 2, ["u3"])
+        out, errs = self.apply([tgt, src], {
+            src["xmlid"]: row(src["xmlid"], decision="fusionner", fusion_vers=tgt["xmlid"])})
+        self.assertEqual(len(out), 2)
+        self.assertEqual(out[0]["mentions"], 5)
+        self.assertEqual(len(errs), 1)
+        self.assertIn("type", errs[0])
+        self.assertEqual(self.status(src["xmlid"]), "active")
+
     def test_doute_note(self):
         rec = {"wikidata_qid": "Q1", "match_confidence": "medium"}
         c = self.cl("person", "Platon", 3, ["u1"], rec)

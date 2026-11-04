@@ -161,24 +161,46 @@ def apply_curation(clusters, rows, registry, fetch_record):
                 errors.append("%s : type_corrige %r inconnu (ignore)" % (r["id"], typ))
                 continue
             old = c["xmlid"]
+            other = by_id.get(registry.get(typ, c["label_norm"]))
+            if other is None:
+                try:
+                    new = registry.assign(typ, c["label_norm"], c["ner_ids"])
+                except ValueError as e:
+                    errors.append("%s : type_corrige impossible (%s)" % (r["id"], e))
+                    continue
             registry.mark(old, "deleted")
             c["type"] = typ
             c["orig_xmlid"] = old
             c["rec"] = None          # le match Wikidata visait l'ancien type
-            c["xmlid"] = registry.assign(typ, c["label_norm"], c["ner_ids"])
             del by_id[old]
-            other = by_id.get(c["xmlid"])
-            if other is not None:    # la cle existait deja : on fusionne
+            if other is not None:    # la cle existe deja dans le build : on fusionne
+                c["xmlid"] = other["xmlid"]
                 _merge(other, c)
                 removed.add(id(c))
             else:
-                by_id[c["xmlid"]] = c
+                c["xmlid"] = new
+                by_id[new] = c
     out = [c for c in out if id(c) not in removed]
 
     # 3) fusions (ids connus = ids apres l'etape 2)
+    #    une fusion vers une entite a supprimer ou d'un autre type est refusee
+    #    (la source reste intacte) : jamais de fusion-puis-suppression silencieuse
     live = {id(c) for c in out}
-    frows = {c["xmlid"]: dict(r, id=c["xmlid"]) for c, r in bound
-             if id(c) in live and r.get("decision") == "fusionner"}
+    doomed = {c["xmlid"] for c, r in bound
+              if id(c) in live and r.get("decision") == "supprimer"}
+    frows = {}
+    for c, r in bound:
+        if id(c) not in live or r.get("decision") != "fusionner":
+            continue
+        tgt = by_id.get(r.get("fusion_vers", ""))
+        if tgt is not None and tgt["xmlid"] in doomed:
+            errors.append("%s : fusion_vers %s est a supprimer (fusion ignoree)"
+                          % (r["id"], tgt["xmlid"]))
+        elif tgt is not None and tgt["type"] != c["type"]:
+            errors.append("%s : fusion_vers %s d'un autre type (%s -> %s, fusion ignoree)"
+                          % (r["id"], tgt["xmlid"], c["type"], tgt["type"]))
+        else:
+            frows[c["xmlid"]] = dict(r, id=c["xmlid"])
     fmap, ferr = resolve_fusions(frows, set(by_id))
     errors += ferr
     for src_id in sorted(fmap):

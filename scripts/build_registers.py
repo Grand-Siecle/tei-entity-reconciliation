@@ -513,8 +513,10 @@ def main():
     registry = IdRegistry(ID_REGISTRY, today=BUILD_DATE)
     registry.load()
     clusters = sorted(clusters, key=lambda x: (x["type"], -x["mentions"], x["label"].lower()))
-    for c in clusters:
-        c["xmlid"] = registry.assign(c["type"], c["label_norm"], c["ner_ids"])
+    # assign_all : cles exactes d'abord, chevauchement d'UUID ensuite
+    xmlids = registry.assign_all([(c["type"], c["label_norm"], c["ner_ids"]) for c in clusters])
+    for c, xid in zip(clusters, xmlids):
+        c["xmlid"] = xid
         c["rec"] = recon.get((c["type"], c["label_norm"]))
 
     # surcouche de curation (decisions humaines)

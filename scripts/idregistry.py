@@ -84,17 +84,49 @@ class IdRegistry:
         self._claimed.add(row["xml_id"])
         return row["xml_id"]
 
+    def assign_all(self, items):
+        """Attribue les ids d'un build entier : [(type, label_norm, ner_ids)] ->
+        [xml_id] dans l'ordre d'entree.
+
+        Deux passes (invariant) : 1) toutes les cles exactes sont reclamees
+        d'abord, 2) seulement ensuite le chevauchement d'UUID pour le reste.
+        Ainsi une entite dont la cle n'a pas change garde toujours son id, meme
+        si un autre cluster partage certains de ses UUID."""
+        out = [None] * len(items)
+        for i, (typ, label_norm, ner_ids) in enumerate(items):
+            if typ not in PREFIX:
+                raise ValueError("type d'entite inconnu : %r" % typ)
+            if (typ, label_norm) in self._by_key:
+                out[i] = self.assign(typ, label_norm, ner_ids)
+        for i, (typ, label_norm, ner_ids) in enumerate(items):
+            if out[i] is None:
+                out[i] = self.assign(typ, label_norm, ner_ids)
+        return out
+
     def assign(self, typ, label_norm, ner_ids):
+        """Id d'une entite (cle exacte, sinon chevauchement d'UUID avec une ligne
+        active non reclamee, sinon nouvel id). Pour un build complet, utiliser
+        assign_all (cles exactes d'abord)."""
         if typ not in PREFIX:
             raise ValueError("type d'entite inconnu : %r" % typ)
         xid = self._by_key.get((typ, label_norm))
         if xid is not None:
+            # une cle est unique par build : la reclamer deux fois produirait
+            # silencieusement un xml:id duplique dans le registre
+            if xid in self._claimed:
+                raise ValueError("cle (%s, %r) deja attribuee a %s dans ce build"
+                                 % (typ, label_norm, xid))
+            # une ligne supprimee/fusionnee est reactivee : la ligne de
+            # curation qui la vise se reappliquera a la meme entite
             return self._touch(self._rows[xid], ner_ids)
-        # chevauchement d'UUID NER (meme type, id pas encore pris cette session)
+        # chevauchement d'UUID NER : meme type, ligne ACTIVE seulement (ne pas
+        # ressusciter un id supprime/fusionne, sa decision viserait une autre
+        # entite), pas encore reclamee dans ce build
         want = set(ner_ids)
         best, best_n = None, 0
         for row in self._rows.values():
-            if row["type"] != typ or row["xml_id"] in self._claimed:
+            if (row["type"] != typ or row["status"] != "active"
+                    or row["xml_id"] in self._claimed):
                 continue
             n = len(want & row["ner_ids"])
             if n > best_n or (n == best_n and n and row["xml_id"] < best["xml_id"]):
