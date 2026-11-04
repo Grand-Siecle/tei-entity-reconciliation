@@ -180,25 +180,49 @@ Apres : <persName ref="#person-000432" cert="high">Platon</persName>
 
 ### Outil : `scripts/rewrite_refs.py`
 
-Reecrit les `@ref` en streaming (memoire constante, OK pour des fichiers >200 Mo)
-a partir de `data/registers/id_mapping.csv`.
+Reecrit les `@ref` du corps en streaming (memoire constante, OK pour des fichiers
+>200 Mo) a partir de `data/registers/id_mapping.csv`, **et reconstruit les listes
+internes du document** (`teiHeader`, `standOff`) avec les ids de registre.
 
 ```bash
 python3 scripts/rewrite_refs.py --dry-run data/LIV0001_reconciled.tei.xml   # compte, n'ecrit rien
 python3 scripts/rewrite_refs.py --out /tmp/preview data/LIV0001_*.xml        # ecrit ailleurs (originaux intacts)
 python3 scripts/rewrite_refs.py data/*.tei.xml                               # reecriture en place (atomique)
+python3 scripts/rewrite_refs.py --no-standoff data/*.tei.xml                 # ancien comportement : @ref seulement
 ```
 
-**Deux invariants critiques** (sinon corruption) :
+> **Issue #1 (corrigee).** Les versions precedentes ne reecrivaient que `@ref` et
+> laissaient les `xml:id` UUID dans le `standOff` / `particDesc` : le corps pointait
+> vers `#person-000432` alors que la liste du document gardait `pers-<uuid>`. Les
+> jointures entete <-> corps par id ne trouvaient plus rien et les listes devenaient
+> orphelines ([issue #1](https://github.com/Grand-Siecle/tei-entity-reconciliation/issues/1)).
+> Correctif retenu (option 1 de l'issue) : les listes internes sont reconstruites avec
+> les ids de registre. `--no-standoff` restaure l'ancien comportement.
 
-1. **Ne reecrire QUE l'attribut `@ref`, jamais les `xml:id` du standOff.** Le mapping
+**Invariants** (sinon corruption) :
+
+1. **Une seule entree par id de registre dans les listes du document.** Le mapping
    est *plusieurs-vers-un* (la deduplication a fusionne plusieurs UUID vers un meme
-   id de registre). Reecrire les `xml:id` creerait des id en double dans un document
-   -> XML invalide / erreur d'indexation eXist. Le script ancre sa regex sur
-   `\sref="..."` exactement pour ca.
-2. **Les refs absentes du mapping restent telles quelles** (entites non reconciliees).
-   Elles continuent de pointer vers le standOff local du document, qui reste valide.
-   C'est normal de voir quelques `#event-<uuid>` subsister.
+   id de registre) : renommer betement les `xml:id` creerait des id en double -> XML
+   invalide / erreur d'indexation eXist. Dans les blocs `<teiHeader>` et `<standOff>`,
+   les entrees qui tombent sur le meme id sont donc **fusionnees** : la premiere (ordre
+   du document) est gardee et renommee, les noms des autres sont ajoutes en
+   `type="variant"` quand le texte differe, le `@cert` le plus fort est conserve, les
+   autres entrees sont supprimees. Les jetons de `@target` / `@corresp` qui sont des
+   UUID du mapping sont reecrits aussi (`linkGrp/link` reste valide). Les ids de
+   mention (`pers-<uuid>-m1`) et de segments (`ent-xxxx-0`) ne bougent jamais.
+2. **Dans le `<text>`, seul l'attribut `@ref` est modifie** (regex ancree sur
+   `\sref="..."`, traitement ligne par ligne).
+3. **Les refs absentes du mapping restent telles quelles** (entites non reconciliees,
+   ou supprimees en curation). Elles continuent de pointer vers l'entree locale du
+   document, laissee intacte. C'est normal de voir quelques `#event-<uuid>` subsister.
+4. **Prudence et idempotence.** Un bloc `<teiHeader>` / `<standOff>` qui ne se parse
+   pas -> avertissement `WARN ... @ref seulement` et repli sur la seule reecriture des
+   `@ref` pour ce fichier. Un fichier sans rien a changer reste identique a l'octet
+   pres ; un second passage ne change rien (`COUNT 0`).
+
+`COUNT <n>` (et `TOTAL`) compte desormais les `@ref` reecrits **plus** les
+modifications des listes internes (entrees renommees, fusionnees, `@target` reecrits).
 
 ### Upload : `scripts/upload_tei.sh`
 
@@ -283,9 +307,12 @@ depuis la racine du projet :
 python3 scripts/extract_entities.py      # TEI -> build/ner/entities_clusters.json (+ .csv)
 python3 scripts/reconcile_wikidata.py    # -> build/ner/entities_reconciled.json (resumable, cache)
 python3 scripts/build_registers.py       # -> data/registers/*.xml + id_mapping.csv + rapport
-python3 scripts/rewrite_refs.py data/*.tei.xml   # Etape 4 : @ref UUID -> id registre
+python3 scripts/rewrite_refs.py data/*.tei.xml   # Etape 4 : @ref + listes internes UUID -> id registre
 scripts/upload_tei.sh data/registers/*.xml data/*.tei.xml   # push REST vers eXist (si sync VS Code HS)
 ```
+
+Travail en equipe (voir plus bas) : `scripts/export_lots.py` (lots de relecture) et
+`scripts/import_curation.py` (decisions -> `data/registers/curation.csv`).
 
 Options utiles : `reconcile_wikidata.py --min-mentions N --types person,place --limit N`.
 Le cache (`build/ner/wd_cache.json`) rend les relances quasi instantanees ;
@@ -403,6 +430,13 @@ But : ecrire les 9 fichiers TEI + le mapping.
 - **Tracabilite** sur chaque entree : `note[@type='ner-ids']` (UUID fusionnes),
   `sources`, `mentions`, `reconciliation-confidence`. Plus `id_mapping.csv` global
   (UUID NER → id registre) pour reecrire les `@ref` plus tard.
+- **Ids stables** (`scripts/idregistry.py`, `data/registers/id_registry.csv`) : un id
+  est attribue une fois pour toutes (cle `(type, label_norm)`, sinon chevauchement
+  majoritaire des UUID NER, sinon nouvel id) et n'est jamais reutilise. Ajouter des
+  documents ne renumerote donc plus les entites existantes.
+- **Surcouche de curation** (`scripts/curation.py`, `data/registers/curation.csv`) :
+  reappliquee a chaque build (voir « Travail en équipe »). Les clusters apres curation
+  sont ecrits dans `build/ner/entities_registered.json` (entree de `export_lots.py`).
 
 | Pour changer... | Modifier |
 |---|---|
@@ -410,6 +444,120 @@ But : ecrire les 9 fichiers TEI + le mapping.
 | Severite du filtre de variantes | `related_variant` (seuils) |
 | Structure XML d'un type | la fonction `gen_*` correspondante |
 | Mapping fichier / racine / prefixe d'id | dict `TYPES` |
+
+---
+
+## Travail en équipe (curation incrementale)
+
+Principe : les fichiers generes sont jetables et entierement regeneres a chaque build.
+**Les decisions humaines ne vivent que dans `data/registers/curation.csv`**, indexees
+par l'id de registre stable conserve dans `data/registers/id_registry.csv`. Ces deux
+fichiers sont **commites dans git** (le `.gitignore` exclut les autres CSV de
+`data/`) et ne doivent jamais etre supprimes ; tout le reste se reconstruit.
+
+### Le cycle
+
+```
+extraction → reconciliation → build → export des lots → relecteurs (OpenRefine / tableur)
+      → import des decisions → build → reecriture depuis les documents ORIGINAUX
+      ↺ a chaque ajout de documents ou nouveau lot relu
+```
+
+```bash
+# 1-3. extraction, reconciliation, build comme d'habitude
+#      (ids pris dans id_registry.csv, curation.csv reappliquee)
+python3 scripts/build_registers.py
+# 4. lots de relecture (CSV), un fichier par type et par tranche de 500 lignes
+python3 scripts/export_lots.py --min-mentions 2 --out build/ner/lots
+# 5. les relecteurs editent les lots (kit ci-dessous), puis :
+python3 scripts/import_curation.py --qui "Alice" --known-ids data/registers/id_registry.csv \
+  --dry-run lots_alice/*.csv        # bilan seulement
+python3 scripts/import_curation.py --qui "Alice" --known-ids data/registers/id_registry.csv \
+  lots_alice/*.csv                  # ecrit data/registers/curation.csv
+# 6. rebuild : decisions appliquees, ids inchanges
+python3 scripts/build_registers.py
+# 7. reecrire une copie fraiche des documents ORIGINAUX avec le nouveau mapping
+python3 scripts/rewrite_refs.py --out data/rewritten originaux/*.tei.xml
+# 8. controle (les entites supprimees gardent leurs refs locales : --ignore-ref si besoin)
+tests/validate_registers.py data/registers --docs "data/rewritten/*.tei.xml" \
+  --curation data/registers/curation.csv
+git add data/registers/id_registry.csv data/registers/curation.csv
+```
+
+On reecrit **depuis les originaux** : un document deja reecrit ne porte plus les UUID
+NER, il ne profiterait donc pas d'une fusion ou d'une suppression decidee ensuite.
+
+A l'ajout de documents : les entites existantes gardent leur id, les decisions
+existantes s'appliquent toujours, et l'export suivant marque chaque ligne `nouveau`,
+`modifié` ou `inchangé` (colonne `statut`, calculee contre `build/ner/lots_state.json` ;
+`--only-new` n'exporte que les deux premiers).
+
+### Kit du relecteur
+
+Tout ce dont un relecteur a besoin est dans [`relecteurs/`](../relecteurs/) :
+
+- [`relecteurs/README.md`](../relecteurs/README.md) — la marche a suivre en bref ;
+- [`relecteurs/guide_relecteur_openrefine.pdf`](../relecteurs/guide_relecteur_openrefine.pdf)
+  — le guide OpenRefine pas a pas, avec captures (source :
+  [`docs/guide_relecteur_openrefine.md`](guide_relecteur_openrefine.md)) ;
+- les recettes OpenRefine a coller dans *Undo / Redo → Apply* :
+  [`relecteurs/recettes/debut_de_lot.json`](../relecteurs/recettes/debut_de_lot.json)
+  (debut de lot : reconciliation, colonne `qid_final`) et
+  [`relecteurs/recettes/fin_de_lot.json`](../relecteurs/recettes/fin_de_lot.json)
+  (fin de lot, avant l'export CSV).
+
+Un simple tableur convient aussi : remplir les colonnes de decision du lot et
+enregistrer en CSV (separateur `,` `;` ou tabulation, UTF-8 avec ou sans BOM ;
+`export_lots.py --excel` ecrit `;` + BOM pour Excel FR).
+
+### Vocabulaire des decisions (`curation.csv`)
+
+Colonnes : `id,type,decision,qid_corrige,fusion_vers,label_corrige,type_corrige,commentaire,qui,date,source`.
+
+| `decision` | Effet au build |
+|---|---|
+| *(vide)* | aucune decision ; `label_corrige` / `type_corrige` / `commentaire` s'appliquent quand meme |
+| `ok` | asserte le QID propose quelle que soit sa confiance (confiance `curated`) |
+| `corriger` | `qid_corrige` rempli → ce QID (proprietes recuperees sur Wikidata), confiance `curated` ; `qid_corrige` vide → aucun QID (`rejected`) |
+| `fusionner` | fusion dans `fusion_vers` (chaines A→B→C resolues, cycles signales et ignores) |
+| `supprimer` | entite retiree des registres ; ses UUID ne sont plus mappes (les refs restent locales) |
+| `doute` | aucun changement, `<note type="curation">doute</note>` sur l'entree |
+
+`label_corrige` (nouveau libelle principal) et `type_corrige` (changement de
+registre) s'appliquent avec n'importe quelle decision. Les erreurs (cible inconnue,
+cycle...) ne bloquent jamais le build : elles sont signalees.
+
+### Import : comment une ligne devient une decision
+
+`import_curation.py` lit les lots edites (tableur) et les exports OpenRefine, et
+applique cet ordre :
+
+1. **etoile** (`starred` / `supprimer` vrai) ou decision `supprimer` → `supprimer` ;
+2. decision `fusionner`, ou `fusion_vers` rempli sans decision → `fusionner` ;
+3. **`qid_final`** (colonne de la recette OpenRefine, QID ou URL Wikidata) : `""` =
+   non touche (aucune information) ; `AUCUN` = match rejete → `corriger` sans QID
+   (si un QID etait implique) ; QID different du QID implique → `corriger` avec ce
+   QID ; egal a `qid_propose` sans decision → `ok` ;
+4. decision explicite `ok` / `corriger` / `doute` (`qid_corrige` seul → `corriger`) ;
+5. **drapeau** (`flagged` / `doute` vrai) → `doute` ;
+6. seulement `label_corrige` / `type_corrige` / `commentaire` → ligne gardee,
+   decision vide.
+
+(vrai = `true|1|oui|x|yes|vrai`.) Les lignes d'un meme type partageant un
+`label_corrige` non vide (sur l'ensemble des fichiers importes) sont **fusionnees**
+dans celle qui a le plus de mentions (`fusionner` → son id), sauf decision explicite.
+Une nouvelle ligne remplace la ligne de `curation.csv` de meme id ; re-importer tel
+quel un lot pre-rempli garde `qui` / `date` / `source` d'origine. `--known-ids` ignore
+les ids absents de `id_registry.csv`.
+
+### Garde-fou de l'export
+
+Les relecteurs editent les lots sur place. `export_lots.py` ne remplace donc que les
+lots listes dans le `lots_manifest.csv` precedent et **refuse** (sauf `--force`) si
+l'un d'eux a ete modifie depuis son ecriture (mtime notee dans
+`<out>/.lots_written.json`) ou si un fichier cible existe hors manifeste.
+`.lots_written.json` peut etre supprime sans risque : le controle se rabat alors sur
+la mtime du manifeste (moins fiable).
 
 ## Checklist
 
@@ -420,10 +568,16 @@ But : ecrire les 9 fichiers TEI + le mapping.
 - [x] Generation des registres TEI (9 types) + `id_mapping.csv`
 - [x] Rapport de reconciliation (`build/ner/reconciliation_report.md`)
 - [ ] Reconciliation avec les referentiels ArtErm (artworks / materials / techniques)
-- [ ] Curation manuelle des matchs low / ambigus
+- [x] Ids de registre stables (`data/registers/id_registry.csv`, jamais reutilises)
+- [x] Outillage de curation en equipe : `curation.csv` reappliquee a chaque build,
+      lots de relecture (`export_lots.py`), import des decisions (`import_curation.py`),
+      kit relecteur (`relecteurs/`)
+- [ ] Curation manuelle des matchs low / ambigus (en cours, par lots)
 - [x] Reecriture des `@ref` dans les documents TEI via `id_mapping.csv`
-      (`scripts/rewrite_refs.py` ; format `#person-NNNNNN`, seul `@ref` modifie ;
+      (`scripts/rewrite_refs.py` ; format `#person-NNNNNN` ;
       pilote 2026-06-13 : ~45 980 refs sur 35 docs, 0 echec)
+- [x] Listes internes (`teiHeader` / `standOff`) reconstruites avec les ids de
+      registre, une entree par id (issue #1 ; `--no-standoff` = ancien comportement)
 - [ ] Wiring app : ajouter event/material/technique/artwork/date a
       `config.xqm` (`$config:register-map`) et `collection.xconf`
 - [ ] Upload registres dans eXist-db + reindexation
