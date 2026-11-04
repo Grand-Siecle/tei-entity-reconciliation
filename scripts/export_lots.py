@@ -13,15 +13,16 @@ cet etat.
 
 Les lots sont edites sur place par les relecteurs : une nouvelle exportation
 ne remplace que les lots listes dans le manifeste precedent pour les types
-reecrits, et refuse (sauf --force) si l'un d'eux a ete modifie depuis son
-ecriture (mtime notee dans <out>/.lots_written.json) ou si un fichier cible
-existe sans figurer au manifeste.
-<out>/.lots_written.json (fichier technique : mtime de chaque lot a l'ecriture)
-peut etre supprime sans risque ; le controle se rabat alors sur la mtime du
-manifeste, moins fiable (un lot modifie avant une exportation d'un autre type
-n'est plus detecte).
+reecrits, et refuse (sauf --force) si l'un d'eux a ete modifie sans avoir ete
+importe (son empreinte sha256 differe de celle notee a l'ecriture ET de toutes
+celles notees par import_curation.py), ou si un fichier cible existe sans
+figurer au manifeste.
+<out>/.lots_written.json (fichier technique : {lot: {"written": sha256,
+"imported": [sha256...]}}) peut etre supprime sans risque ; pour un lot sans
+empreinte, le controle se rabat sur la mtime du manifeste (moins fiable).
 
-Les colonnes de decision sont pre-remplies depuis curation.csv (CURATION_CSV).
+Les colonnes de decision sont pre-remplies depuis curation.csv (CURATION_CSV,
+sinon <REGISTERS_DIR>/curation.csv, sinon data/registers/curation.csv).
 
 Usage :
   python3 scripts/export_lots.py [--out DIR] [--types person,place]
@@ -32,6 +33,7 @@ stdlib uniquement.
 import argparse
 import csv
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -43,8 +45,7 @@ import curation as curation_mod  # noqa: E402
 
 ROOT = os.path.dirname(HERE)
 OUT_DIR = os.environ.get("NER_OUT") or os.path.join(ROOT, "build", "ner")
-CURATION_CSV = os.environ.get("CURATION_CSV") or os.path.join(
-    ROOT, "data", "registers", "curation.csv")
+CURATION_CSV = curation_mod.default_curation_path()
 
 LOT_COLUMNS = [
     "id", "type", "label", "label_moderne", "variantes", "mentions",
@@ -65,10 +66,10 @@ def _s(v):
 
 
 def signature(c):
-    """Change signature of a cluster: label|qid|mentions."""
+    """Change signature of a cluster: label|qid (`modifié` = the label or the
+    proposal changed; a new mention alone does not count)."""
     rec = c.get("rec") or {}
-    return "%s|%s|%s" % (_s(c.get("label")), _s(rec.get("wikidata_qid")),
-                         _s(c.get("mentions")))
+    return "%s|%s" % (_s(c.get("label")), _s(rec.get("wikidata_qid")))
 
 
 def status_for(xmlid, sig, state):
@@ -143,6 +144,49 @@ def _read_manifest(path):
                 for r in csv.DictReader(f, delimiter=delim)]
 
 
+def file_sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 16), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _load_sidecar(path):
+    """{lot: {"written": sha, "imported": [sha]}}; entries of an older format
+    (or an unreadable file) are dropped."""
+    try:
+        data = _load_json(path, {})
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {k: v for k, v in data.items() if isinstance(v, dict)}
+
+
+def _save_sidecar(path, data):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=1, sort_keys=True)
+    os.replace(tmp, path)
+
+
+def record_import(path):
+    """Note the sha256 of an imported file in the .lots_written.json of its
+    directory (created if missing): a lot edited then imported may be
+    replaced by the next export without --force."""
+    d = os.path.dirname(os.path.abspath(path))
+    side = os.path.join(d, WRITTEN_SIDECAR)
+    data = _load_sidecar(side)
+    entry = data.setdefault(os.path.basename(path), {})
+    imported = list(entry.get("imported") or [])
+    h = file_sha256(path)
+    if h not in imported:
+        imported.append(h)
+    entry["imported"] = imported
+    _save_sidecar(side, data)
+
+
 def write_lots(rows, out_dir, max_rows, excel, force=False):
     """Write <type>_lotNN.csv files (max_rows each) and lots_manifest.csv.
 
@@ -150,18 +194,18 @@ def write_lots(rows, out_dir, max_rows, excel, force=False):
     previous lots_manifest.csv, and only for the types written now, are
     replaced; lots of other types are kept and stay in the manifest.
     Raises LotsEditedError (nothing written) when a file to replace was
-    modified after it was written (mtime recorded in .lots_written.json,
-    falling back to the manifest's mtime), or when a target file exists but
-    is not listed in the manifest, unless force=True.
+    modified and not imported (its sha256 differs from the one recorded at
+    write time in .lots_written.json and from every hash recorded there by
+    import_curation.py; without a record, its mtime is compared with the
+    manifest's), or when a target file exists but is not listed in the
+    manifest, unless force=True.
     Returns the written lot paths."""
     os.makedirs(out_dir, exist_ok=True)
     man_path = os.path.join(out_dir, "lots_manifest.csv")
     old_manifest = _read_manifest(man_path)
     man_mtime = os.path.getmtime(man_path) if old_manifest else 0
-    # mtime of each lot right after it was written: the manifest is rewritten
-    # by later exports (other types), so its own mtime is only a fallback.
     written_path = os.path.join(out_dir, WRITTEN_SIDECAR)
-    written = _load_json(written_path, {})
+    written = _load_sidecar(written_path)
     max_rows = max(1, int(max_rows))
     by_type = {}
     for r in rows:
@@ -176,9 +220,16 @@ def write_lots(rows, out_dir, max_rows, excel, force=False):
     if not force:
         problems = []
         for f in to_delete:
-            ref = written.get(f, man_mtime)
-            if os.path.getmtime(os.path.join(out_dir, f)) > ref:
-                problems.append("%s modifie apres l'export" % f)
+            fpath = os.path.join(out_dir, f)
+            entry = written.get(f) or {}
+            if entry.get("written"):
+                h = file_sha256(fpath)
+                edited = (h != entry["written"]
+                          and h not in (entry.get("imported") or []))
+            else:
+                edited = os.path.getmtime(fpath) > man_mtime
+            if edited:
+                problems.append("%s modifie depuis l'export et non importe" % f)
         for f in targets:
             if f not in listed and os.path.exists(os.path.join(out_dir, f)):
                 problems.append("%s existe mais n'est pas dans le manifeste" % f)
@@ -206,7 +257,7 @@ def write_lots(rows, out_dir, max_rows, excel, force=False):
                 w.writeheader()
                 w.writerows(chunk)
             paths.append(path)
-            written[name] = os.path.getmtime(path)
+            written[name] = {"written": file_sha256(path)}
             m = {"file": name, "type": typ, "rows": len(chunk)}
             for s in STATUTS:
                 m[s] = sum(1 for r in chunk if r.get("statut") == s)
@@ -217,9 +268,8 @@ def write_lots(rows, out_dir, max_rows, excel, force=False):
         w.writeheader()
         w.writerows(manifest)
     listed_now = {m["file"] for m in manifest}
-    with open(written_path, "w", encoding="utf-8") as f:
-        json.dump({k: v for k, v in written.items() if k in listed_now}, f,
-                  indent=1, sort_keys=True)
+    _save_sidecar(written_path,
+                  {k: v for k, v in written.items() if k in listed_now})
     return paths
 
 

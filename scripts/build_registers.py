@@ -47,7 +47,7 @@ from xml.sax.saxutils import escape
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from idregistry import IdRegistry  # noqa: E402
-from curation import apply_curation, load_curation  # noqa: E402
+from curation import apply_curation, default_curation_path, load_curation  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Surchargeables par variable d'env (defauts = layout du repo) :
@@ -60,7 +60,7 @@ RECON = os.path.join(OUT_DIR, "entities_reconciled.json")
 LABELCACHE = os.path.join(OUT_DIR, "wd_labels.json")
 REGISTERED = os.path.join(OUT_DIR, "entities_registered.json")
 ID_REGISTRY = os.environ.get("ID_REGISTRY") or os.path.join(REG_DIR, "id_registry.csv")
-CURATION_CSV = os.environ.get("CURATION_CSV") or os.path.join(REG_DIR, "curation.csv")
+CURATION_CSV = default_curation_path()
 
 PUBLISHER = os.environ.get("CORPUS_PUBLISHER", "Projet Grand Siècle — UNIL / UNIGE")
 LICENCE_STATUS = os.environ.get("CORPUS_LICENCE_STATUS", "free")

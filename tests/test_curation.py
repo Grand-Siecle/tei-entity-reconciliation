@@ -122,6 +122,30 @@ class CurationTest(unittest.TestCase):
         self.assertEqual(out[0]["curation"]["qui"], "ana")
         self.assertEqual(c["rec"]["match_confidence"], "low")  # input not mutated
 
+    def test_ok_with_accepted_qid_equal_asserts(self):
+        c = self.cl("person", "Platon", 3, ["u1"],
+                    {"wikidata_qid": "Q859", "match_confidence": "low"})
+        out, errs = self.apply([c], {c["xmlid"]: row(c["xmlid"], decision="ok",
+                                                     qid_corrige="Q859")})
+        self.assertEqual(errs, [])
+        self.assertEqual(out[0]["rec"]["match_confidence"], "curated")
+
+    def test_ok_with_changed_proposal_not_asserted(self):
+        c = self.cl("person", "Platon", 3, ["u1"],
+                    {"wikidata_qid": "Q1", "match_confidence": "low"})
+        out, errs = self.apply([c], {c["xmlid"]: row(c["xmlid"], decision="ok",
+                                                     qid_corrige="Q859")})
+        self.assertEqual(errs, ["%s : proposition changee depuis la relecture "
+                                "(Q859 -> Q1)" % c["xmlid"]])
+        self.assertEqual(out[0]["rec"]["match_confidence"], "low")
+        self.assertEqual(out[0]["rec"]["wikidata_qid"], "Q1")
+        c2 = self.cl("person", "Socrate", 3, ["u2"], None)
+        out, errs = self.apply([c2], {c2["xmlid"]: row(c2["xmlid"], decision="ok",
+                                                       qid_corrige="Q913")})
+        self.assertEqual(errs, ["%s : proposition changee depuis la relecture "
+                                "(Q913 -> aucune)" % c2["xmlid"]])
+        self.assertIsNone(out[0]["rec"])
+
     def test_corriger_with_qid_fetches(self):
         c = self.cl("person", "Platon", 3, ["u1"],
                     {"wikidata_qid": "Q1", "match_confidence": "high"})

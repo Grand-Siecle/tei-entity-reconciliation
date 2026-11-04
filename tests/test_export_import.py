@@ -156,23 +156,60 @@ class TestExport(Base):
         t = os.path.getmtime(path) + seconds
         os.utime(path, (t, t))
 
-    def test_edited_lot_refused_then_forced(self):
-        self.export("--max-rows", "1")
-        self.touch_later("person_lot02.csv")
+    def edit_lot(self, name, decision="supprimer"):
+        """Simulate a reviewer: set the first row's decision, save in place."""
+        path = os.path.join(self.out, name)
+        rows = read_csv(path)
+        rows[1][rows[0].index("decision")] = decision
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            csv.writer(f).writerows(rows)
+        self.touch_later(name)
+        return path
+
+    def export_refused(self, *args):
         p = subprocess.run(
             [sys.executable, os.path.join(SCRIPTS, "export_lots.py"),
-             "--out", self.out, "--max-rows", "1"],
+             "--out", self.out] + list(args),
             env=self.env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             universal_newlines=True)
         self.assertNotEqual(p.returncode, 0)
+        return p
+
+    def test_edited_lot_refused_then_forced(self):
+        self.export("--max-rows", "1")
+        self.edit_lot("person_lot02.csv")
+        p = self.export_refused("--max-rows", "1")
         self.assertIn("person_lot02.csv", p.stderr)
+        self.assertIn("non importe", p.stderr)
         self.assertTrue(os.path.exists(os.path.join(self.out, "person_lot02.csv")))
         self.export("--max-rows", "2", "--force")
         self.assertFalse(os.path.exists(os.path.join(self.out, "person_lot02.csv")))
 
+    def test_edited_then_imported_lot_replaced_without_force(self):
+        self.export()
+        path = self.edit_lot("person_lot01.csv")
+        self.export_refused()
+        self.run_script("import_curation.py", path)
+        with open(os.path.join(self.out, ".lots_written.json")) as f:
+            side = json.load(f)
+        self.assertEqual(side["person_lot01.csv"]["imported"],
+                         [export_lots.file_sha256(path)])
+        self.export()
+        self.assertEqual(self.lot_rows("person_lot01.csv")[0]["decision"],
+                         "supprimer")   # pre-filled from curation.csv
+
+    def test_copied_lot_same_content_not_refused(self):
+        self.export()
+        path = os.path.join(self.out, "person_lot01.csv")
+        copy = os.path.join(self.tmp, "copy.csv")
+        shutil.copy(path, copy)
+        shutil.copy(copy, path)        # same content, new mtime
+        self.touch_later("person_lot01.csv")
+        self.export()
+
     def test_edited_other_type_survives_manifest_rewrite(self):
         self.export()
-        self.touch_later("place_lot01.csv")
+        self.edit_lot("place_lot01.csv")
         self.export("--types", "person")   # rewrites the manifest
         with self.assertRaises(export_lots.LotsEditedError):
             export_lots.write_lots(
@@ -240,7 +277,7 @@ class TestExport(Base):
 
     def test_signature_and_status_for(self):
         sig = export_lots.signature(registered()[0])
-        self.assertEqual(sig, "Lomenie|Q1|10")
+        self.assertEqual(sig, "Lomenie|Q1")
         self.assertEqual(export_lots.status_for("person-000001", sig, {}),
                          "nouveau")
         st = {"person-000001": {"sig": sig, "exported": "2026-11-04"}}
@@ -351,13 +388,66 @@ class TestImport(Base):
                                         "starred": "true"})
         self.assertEqual(d["decision"], "supprimer")
 
-    def test_decide_flag_loses_to_qid_final(self):
+    def test_decide_flag_beats_inferred_ok(self):
         d = import_curation.decide_row({"id": "p", "qid_propose": "Q1",
-                                        "qid_final": "Q1", "flagged": "true"})
-        self.assertEqual(d["decision"], "ok")
+                                        "qid_final": "Q1", "qid_juge": "single",
+                                        "flagged": "true"})
+        self.assertEqual((d["decision"], d["qid_corrige"]), ("doute", ""))
         d = import_curation.decide_row({"id": "p", "qid_propose": "Q1",
                                         "qid_final": "", "flagged": "true"})
         self.assertEqual(d["decision"], "doute")
+        # a flagged row whose QID was changed keeps that QID as information
+        d = import_curation.decide_row({"id": "p", "qid_propose": "Q1",
+                                        "qid_final": "Q7", "doute": "true"})
+        self.assertEqual((d["decision"], d["qid_corrige"]), ("doute", "Q7"))
+        d = import_curation.decide_row({"id": "p", "decision": "ok",
+                                        "qid_propose": "Q1", "doute": "true"})
+        self.assertEqual(d["decision"], "doute")
+
+    def mass_row(self, confiance, **kw):
+        r = {"id": "p", "type": "person", "qid_propose": "Q1",
+             "qid_final": "Q1", "qid_juge": "mass", "confiance": confiance,
+             "supprimer": "false", "doute": "false"}
+        r.update(kw)
+        return r
+
+    def test_decide_untouched_mass_row_needs_complete_lot(self):
+        for conf in ("high", "medium"):
+            self.assertIsNone(import_curation.decide_row(self.mass_row(conf)))
+            d = import_curation.decide_row(self.mass_row(conf), complete=True)
+            self.assertEqual((d["decision"], d["qid_corrige"]), ("ok", "Q1"))
+            # an empty judgement counts as mass (not explicit)
+            self.assertIsNone(import_curation.decide_row(
+                self.mass_row(conf, qid_juge="")))
+
+    def test_decide_untouched_mass_low_never_ok(self):
+        self.assertIsNone(import_curation.decide_row(self.mass_row("low")))
+        self.assertIsNone(import_curation.decide_row(self.mass_row("low"),
+                                                     complete=True))
+
+    def test_decide_explicit_judgement_equal_to_proposal_is_ok(self):
+        for how in ("single", "similar"):
+            d = import_curation.decide_row(self.mass_row("low", qid_juge=how))
+            self.assertEqual((d["decision"], d["qid_corrige"]), ("ok", "Q1"))
+
+    def test_decide_spreadsheet_without_qid_juge_is_ok(self):
+        d = import_curation.decide_row({"id": "p", "qid_propose": "Q1",
+                                        "qid_final": "Q1", "confiance": "low"})
+        self.assertEqual((d["decision"], d["qid_corrige"]), ("ok", "Q1"))
+        d = import_curation.decide_row({"id": "p", "decision": "ok",
+                                        "qid_propose": "Q1"})
+        self.assertEqual((d["decision"], d["qid_corrige"]), ("ok", "Q1"))
+        d = import_curation.decide_row({"id": "p", "decision": "ok"})
+        self.assertEqual((d["decision"], d["qid_corrige"]), ("ok", ""))
+
+    def test_is_complete_file(self):
+        self.assertTrue(import_curation.is_complete_file(
+            "/x/person_lot01_relu_marie_complet.csv"))
+        self.assertTrue(import_curation.is_complete_file("LOT_COMPLET.csv"))
+        self.assertFalse(import_curation.is_complete_file(
+            "person_lot01_relu_marie.csv"))
+        self.assertFalse(import_curation.is_complete_file(
+            "person_lot01_incomplet.csv"))
 
     def test_decide_inferred_corriger_and_fusionner(self):
         d = import_curation.decide_row({"id": "p", "qid_corrige": "Q5"})
@@ -430,6 +520,24 @@ class TestImport(Base):
         self.assertEqual(out["b"]["decision"], "supprimer")
         self.assertEqual(out["a"]["decision"], "")
 
+    def test_merge_label_groups_joins_by_own_label(self):
+        rows_in = [
+            {"id": "person-000001", "type": "person", "label": "Lomenius",
+             "mentions": "5", "label_corrige": ""},
+            {"id": "person-000002", "type": "person", "label": "Lomenii",
+             "mentions": "2", "label_corrige": "Lomenius"},
+            {"id": "person-000003", "type": "person", "label": "Colbert",
+             "mentions": "9", "label_corrige": ""},
+        ]
+        decided = [d for d in (import_curation.decide_row(r) for r in rows_in)
+                   if d]
+        out = {r["id"]: r for r in
+               import_curation.merge_label_groups(decided, rows_in)}
+        self.assertEqual(out["person-000002"]["decision"], "fusionner")
+        self.assertEqual(out["person-000002"]["fusion_vers"], "person-000001")
+        self.assertNotIn("person-000001", out)
+        self.assertNotIn("person-000003", out)
+
     def test_merge_into_curation_overrides_and_keeps_others(self):
         existing = {
             "A": dict.fromkeys(curation.COLUMNS, ""),
@@ -458,10 +566,10 @@ class TestImport(Base):
             {"A": old}, new, "lot.csv", "anne", "2026-11-04")
         self.assertEqual(res["A"], old)
 
-    def write_lot(self, rows, name="lot.csv"):
+    def write_lot(self, rows, name="lot.csv", columns=LOT_COLUMNS):
         path = os.path.join(self.tmp, name)
         with open(path, "w", encoding="utf-8", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=LOT_COLUMNS, restval="")
+            w = csv.DictWriter(f, fieldnames=columns, restval="")
             w.writeheader()
             for r in rows:
                 w.writerow(r)
@@ -518,6 +626,80 @@ class TestImport(Base):
                          ["person-000001"])
         self.assertIn("person-999999", p.stdout + p.stderr)
 
+    def test_cli_id_in_several_files_last_decided_wins(self):
+        lot1 = self.write_lot([
+            {"id": "person-000001", "type": "person", "decision": "supprimer"},
+            {"id": "person-000002", "type": "person", "decision": "doute"}],
+            "person_lot01_relu_anne.csv")
+        lot2 = self.write_lot([
+            {"id": "person-000001", "type": "person"},
+            {"id": "person-000002", "type": "person", "decision": "ok"}],
+            "person_lot01_relu_bob.csv")
+        p = self.run_script("import_curation.py", lot1, lot2)
+        cur = curation.load_curation(self.cur)
+        self.assertEqual(cur["person-000001"]["decision"], "supprimer")
+        self.assertEqual(cur["person-000001"]["source"],
+                         "person_lot01_relu_anne.csv")
+        self.assertEqual(cur["person-000002"]["decision"], "ok")
+        self.assertIn("plusieurs fichiers", p.stdout)
+        self.assertIn("person-000001, person-000002", p.stdout)
+
+    def test_cli_lot_complet_flag_and_file_name(self):
+        row = {"id": "person-000001", "type": "person", "qid_propose": "Q1",
+               "confiance": "high", "qid_final": "Q1", "qid_juge": "mass"}
+        cols = LOT_COLUMNS + ["qid_final", "qid_juge"]
+        lot = self.write_lot([row], "person_lot01_relu_marie.csv", cols)
+        self.run_script("import_curation.py", lot)
+        self.assertEqual(curation.load_curation(self.cur), {})
+        self.run_script("import_curation.py", lot, "--lot-complet")
+        self.assertEqual(curation.load_curation(self.cur)["person-000001"]
+                         ["decision"], "ok")
+        os.remove(self.cur)
+        lot = self.write_lot([row], "person_lot01_relu_marie_complet.csv", cols)
+        self.run_script("import_curation.py", lot)
+        r = curation.load_curation(self.cur)["person-000001"]
+        self.assertEqual((r["decision"], r["qid_corrige"]), ("ok", "Q1"))
+
+    def test_registers_dir_honoured(self):
+        regdir = os.path.join(self.tmp, "regs")
+        cur = os.path.join(regdir, "curation.csv")
+        curation.save_curation(cur, {"person-000001": dict(
+            dict.fromkeys(curation.COLUMNS, ""), id="person-000001",
+            type="person", decision="doute")})
+        env = dict(os.environ, NER_OUT=self.ner, REGISTERS_DIR=regdir)
+        env.pop("CURATION_CSV", None)
+
+        def run(name, *args):
+            p = subprocess.run(
+                [sys.executable, os.path.join(SCRIPTS, name)] + list(args),
+                env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                universal_newlines=True, cwd=self.tmp)
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        run("export_lots.py", "--out", self.out)
+        self.assertEqual(self.lot_rows("person_lot01.csv")[0]["decision"],
+                         "doute")
+        lot = self.write_lot([{"id": "person-000002", "type": "person",
+                               "decision": "supprimer"}])
+        run("import_curation.py", lot)
+        self.assertEqual(curation.load_curation(cur)["person-000002"]
+                         ["decision"], "supprimer")
+        self.assertFalse(os.path.exists(self.cur))
+        old = os.environ.copy()
+        try:
+            os.environ.pop("CURATION_CSV", None)
+            os.environ["REGISTERS_DIR"] = regdir
+            self.assertEqual(curation.default_curation_path(), cur)
+            os.environ["CURATION_CSV"] = "/x/c.csv"
+            self.assertEqual(curation.default_curation_path(), "/x/c.csv")
+            os.environ.pop("CURATION_CSV")
+            os.environ.pop("REGISTERS_DIR")
+            self.assertEqual(curation.default_curation_path(),
+                             os.path.join(ROOT, "data", "registers",
+                                          "curation.csv"))
+        finally:
+            os.environ.clear()
+            os.environ.update(old)
+
     def test_roundtrip_export_edit_import(self):
         self.export("--excel")
         path = os.path.join(self.out, "person_lot01.csv")
@@ -530,6 +712,97 @@ class TestImport(Base):
         cur = curation.load_curation(self.cur)
         self.assertEqual(cur["person-000001"]["decision"], "supprimer")
         self.assertNotIn("person-000002", cur)
+
+
+def recipe_columns():
+    """Columns of a lot after the end recipe (fin_de_lot.json): supprimer and
+    doute inserted at index 1, qid_final and qid_juge after qid_propose."""
+    cols = list(LOT_COLUMNS)
+    with open(os.path.join(ROOT, "relecteurs", "recettes", "fin_de_lot.json"),
+              encoding="utf-8") as f:
+        for op in json.load(f):
+            if op["op"] == "core/column-addition":
+                cols.insert(op["columnInsertIndex"], op["newColumnName"])
+    return cols
+
+
+class TestRecipeRoundtrip(Base):
+    """A lot exported by OpenRefine after the end recipe, imported as is."""
+
+    def rows(self):
+        base = {"type": "person", "supprimer": "false", "doute": "false",
+                "qid_juge": "", "qid_final": "", "confiance": "high"}
+
+        def r(rid, mentions, label, **kw):
+            d = dict(base, id=rid, mentions=str(mentions), label=label)
+            d.update(kw)
+            return d
+        return [
+            # flagged row with a proposal, matched by the start recipe
+            r("person-000001", 50, "Lomenius", qid_propose="Q1",
+              qid_final="Q1", qid_juge="mass", doute="true"),
+            # untouched, high confidence
+            r("person-000002", 40, "Colbert", qid_propose="Q2",
+              qid_final="Q2", qid_juge="mass"),
+            # untouched, low confidence
+            r("person-000003", 30, "Rare", qid_propose="Q3", qid_final="Q3",
+              qid_juge="mass", confiance="low"),
+            # judged by hand (a candidate ticked), equal to the proposal
+            r("person-000004", 20, "Platon", qid_propose="Q4",
+              qid_final="Q4", qid_juge="similar", confiance="low"),
+            # rejected
+            r("person-000005", 10, "Comedie", qid_propose="Q5",
+              qid_final="AUCUN", qid_juge="single"),
+            # another QID chosen
+            r("person-000006", 9, "Apollonius", qid_propose="Q6",
+              qid_final="Q66", qid_juge="single"),
+            # starred
+            r("person-000007", 8, "bello", qid_propose="Q7", qid_final="Q7",
+              qid_juge="mass", supprimer="true"),
+            # grouped onto person-000001's label
+            r("person-000008", 2, "Lomenii", label_corrige="Lomenius"),
+        ]
+
+    def run_import(self, name, *args):
+        path = os.path.join(self.tmp, name)
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=recipe_columns(), restval="")
+            w.writeheader()
+            w.writerows(self.rows())
+        if os.path.exists(self.cur):
+            os.remove(self.cur)
+        self.run_script("import_curation.py", path, *args)
+        return {k: (v["decision"], v["qid_corrige"], v["fusion_vers"])
+                for k, v in curation.load_curation(self.cur).items()}
+
+    def test_recipe_columns(self):
+        cols = recipe_columns()
+        i = cols.index("qid_final")
+        self.assertEqual(cols[i - 1:i + 2], ["qid_propose", "qid_final", "qid_juge"])
+        self.assertIn("supprimer", cols)
+        self.assertIn("doute", cols)
+
+    def expected(self):
+        return {
+            "person-000001": ("doute", "", ""),
+            "person-000004": ("ok", "Q4", ""),
+            "person-000005": ("corriger", "", ""),
+            "person-000006": ("corriger", "Q66", ""),
+            "person-000007": ("supprimer", "", ""),
+            "person-000008": ("fusionner", "", "person-000001"),
+        }
+
+    def test_partial_lot(self):
+        self.assertEqual(self.run_import("person_lot01_relu_marie.csv"),
+                         self.expected())
+
+    def test_complete_lot(self):
+        exp = self.expected()
+        exp["person-000002"] = ("ok", "Q2", "")
+        self.assertEqual(self.run_import("person_lot01_relu_marie_complet.csv"),
+                         exp)
+        self.assertEqual(self.run_import("person_lot01_relu_marie.csv",
+                                         "--lot-complet"), exp)
 
 
 if __name__ == "__main__":

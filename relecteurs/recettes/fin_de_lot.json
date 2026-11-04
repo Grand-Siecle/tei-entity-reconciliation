@@ -10,7 +10,7 @@
     "onError": "set-to-blank",
     "newColumnName": "qid_final",
     "columnInsertIndex": 12,
-    "description": "Crée qid_final : le QID validé, AUCUN si vous avez rejeté la proposition, vide si vous n'avez pas touché la ligne"
+    "description": "Crée qid_final : le QID de la fiche retenue (la proposition si vous n'avez rien changé), AUCUN si vous avez rejeté la proposition, vide s'il n'y avait pas de proposition"
   },
   {
     "op": "core/column-addition",
@@ -37,6 +37,19 @@
     "newColumnName": "doute",
     "columnInsertIndex": 1,
     "description": "Crée doute : true pour les lignes marquées d'un drapeau (à discuter en réunion)"
+  },
+  {
+    "op": "core/column-addition",
+    "engineConfig": {
+      "facets": [],
+      "mode": "row-based"
+    },
+    "baseColumnName": "qid_propose",
+    "expression": "grel:if(isNull(cell.recon), \"\", cell.recon.judgmentAction)",
+    "onError": "set-to-blank",
+    "newColumnName": "qid_juge",
+    "columnInsertIndex": 15,
+    "description": "Crée qid_juge : comment la fiche a été choisie (mass = proposition laissée telle quelle, single ou similar = choisie par vous)"
   },
   {
     "op": "core/text-transform",

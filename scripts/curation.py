@@ -5,7 +5,9 @@ Surcouche de curation (curation.csv) reappliquee a chaque build.
 
 Les decisions humaines vivent uniquement dans curation.csv, indexees par id de
 registre stable :
-  ok        : asserte le QID propose quelle que soit sa confiance ("curated")
+  ok        : asserte le QID propose quelle que soit sa confiance ("curated") ;
+              si qid_corrige (QID accepte a la relecture) differe de la
+              proposition actuelle, rien n'est asserte et c'est signale
   corriger  : qid_corrige -> ce QID ("curated") ; vide -> aucun QID ("rejected")
   fusionner : fusion dans fusion_vers (chaines resolues, cycles signales)
   supprimer : entite retiree (ses UUID ne sont plus mappes)
@@ -27,6 +29,19 @@ COLUMNS = ["id", "type", "decision", "qid_corrige", "fusion_vers", "label_corrig
 DECISIONS = ("ok", "corriger", "fusionner", "supprimer", "doute", "")
 QID_RE = re.compile(r"^Q\d+$")
 VARIANTS_CAP = 40
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def default_curation_path():
+    """CURATION_CSV, sinon <REGISTERS_DIR>/curation.csv, sinon
+    <depot>/data/registers/curation.csv."""
+    env = os.environ.get("CURATION_CSV")
+    if env:
+        return env
+    reg = os.environ.get("REGISTERS_DIR")
+    if reg:
+        return os.path.join(reg, "curation.csv")
+    return os.path.join(ROOT, "data", "registers", "curation.csv")
 
 
 def load_curation(path):
@@ -223,7 +238,12 @@ def apply_curation(clusters, rows, registry, fetch_record):
         dec = r.get("decision", "")
         rec = c.get("rec")
         if dec == "ok":
-            if rec and rec.get("wikidata_qid"):
+            accepted = (r.get("qid_corrige") or "").strip().upper()
+            current = ((rec or {}).get("wikidata_qid") or "").upper()
+            if accepted and accepted != current:
+                errors.append("%s : proposition changee depuis la relecture (%s -> %s)"
+                              % (r["id"], accepted, current or "aucune"))
+            elif rec and rec.get("wikidata_qid"):
                 c["rec"] = dict(rec, match_confidence="curated")
             else:
                 errors.append("%s : ok sans QID propose (rien a asserter)" % r["id"])
