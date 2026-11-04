@@ -6,7 +6,7 @@ Conserve tous les appels API deja payes (recherches + entites)."""
 import json, os, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CACHE = os.path.join(ROOT, "build", "ner", "wd_cache.json")
+CACHE = os.path.join(os.environ.get("NER_OUT") or os.path.join(ROOT, "build", "ner"), "wd_cache.json")
 
 KEEP_PIDS = {
     "P31","P569","P570","P106","P22","P25","P21","P27",

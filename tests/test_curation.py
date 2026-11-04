@@ -55,7 +55,7 @@ class CurationTest(unittest.TestCase):
         self.assertEqual(COLUMNS, ["id", "type", "decision", "qid_corrige", "fusion_vers",
                                    "label_corrige", "type_corrige", "commentaire", "qui",
                                    "date", "source"])
-        self.assertEqual(set(DECISIONS), {"ok", "corriger", "fusionner", "supprimer", "doute"})
+        self.assertEqual(set(DECISIONS), {"ok", "corriger", "fusionner", "supprimer", "doute", ""})
 
     def test_load_missing_file_is_empty(self):
         self.assertEqual(load_curation(os.path.join(self.tmp.name, "nope.csv")), {})

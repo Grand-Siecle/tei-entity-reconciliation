@@ -24,7 +24,7 @@ from idregistry import PREFIX
 
 COLUMNS = ["id", "type", "decision", "qid_corrige", "fusion_vers", "label_corrige",
            "type_corrige", "commentaire", "qui", "date", "source"]
-DECISIONS = ("ok", "corriger", "fusionner", "supprimer", "doute")
+DECISIONS = ("ok", "corriger", "fusionner", "supprimer", "doute", "")
 QID_RE = re.compile(r"^Q\d+$")
 VARIANTS_CAP = 40
 
