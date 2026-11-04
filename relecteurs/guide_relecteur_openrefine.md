@@ -138,7 +138,7 @@ Exemple réel du lot d'essai : pour *Apollonius*, le programme propose « consul
 
 ![La correspondance est corrigée](img/13-correspondance-corrigee.png)
 
-Astuce : avant de valider une personne, regardez les dates dans sa description. Une personne née après 1700 ne peut pas être citée dans un livre du XVII^e siècle. Un lieu doit être en Europe ou dans le monde antique et biblique, sauf si le texte parle explicitement d'ailleurs.
+Astuce : avant de valider une personne, regardez les dates dans sa description. Une personne née après 1700 ne peut pas être citée dans un livre du XVII<sup>e</sup> siècle. Un lieu doit être en Europe ou dans le monde antique et biblique, sauf si le texte parle explicitement d'ailleurs.
 
 ### 6.3 La proposition est fausse et il n'y a pas de bonne fiche : rejetez
 
