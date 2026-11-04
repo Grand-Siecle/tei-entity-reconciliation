@@ -1,0 +1,27 @@
+[
+  {
+    "op": "core/text-transform",
+    "engineConfig": {
+      "facets": [],
+      "mode": "row-based"
+    },
+    "columnName": "label_corrige",
+    "expression": "grel:if(isBlank(value), cells[\"label\"].value, value)",
+    "onError": "keep-original",
+    "repeat": false,
+    "repeatCount": 10,
+    "description": "Pré-remplit label_corrige avec label (pour pouvoir regrouper et corriger les graphies)"
+  },
+  {
+    "op": "core/recon-use-values-as-identifiers",
+    "engineConfig": {
+      "facets": [],
+      "mode": "row-based"
+    },
+    "columnName": "qid_propose",
+    "service": "https://wikidata-reconciliation.wmcloud.org/fr/api",
+    "identifierSpace": "http://www.wikidata.org/entity/",
+    "schemaSpace": "http://www.wikidata.org/prop/direct/",
+    "description": "Transforme les QID proposés en cellules réconciliées Wikidata (aperçu au survol)"
+  }
+]

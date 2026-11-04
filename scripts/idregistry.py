@@ -1,0 +1,165 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Registre d'identifiants stables (id_registry.csv).
+
+Un id de registre (`person-000042`) est attribue une fois pour toutes a une
+entite et n'est jamais reutilise, meme apres suppression ou fusion. Recherche :
+  1. cle exacte (type, label_norm) ;
+  2. sinon chevauchement maximal des UUID NER (meme type) -> l'id suit
+     l'entite quand son libelle normalise change ;
+  3. sinon nouvel id <prefixe><max+1 sur 6 chiffres>.
+
+CSV : type,label_norm,xml_id,status,ner_ids,created,updated
+      status in active|merged|deleted ; ner_ids joints par "|" ; dates ISO.
+
+stdlib uniquement.
+"""
+import csv
+import os
+from datetime import date
+
+PREFIX = {
+    "person": "person-", "place": "place-", "org": "org-", "work": "work-",
+    "event": "event-", "artwork": "artwork-", "material": "material-",
+    "technique": "technique-", "date": "date-",
+}
+FIELDS = ["type", "label_norm", "xml_id", "status", "ner_ids", "created", "updated"]
+
+
+class IdRegistry:
+    def __init__(self, path, today=None):
+        self.path = path
+        self.today = today or date.today().isoformat()
+        self._rows = {}      # xml_id -> row (ner_ids as set)
+        self._by_key = {}    # (type, label_norm) -> xml_id
+        self._claimed = set()  # ids deja attribues pendant cette session
+        # ids reactives par _touch sans autre changement : (statut, updated)
+        # d'avant, restaures si mark() les remet dans leur statut d'origine
+        self._reactivated = {}
+
+    def load(self):
+        self._rows, self._by_key, self._claimed = {}, {}, set()
+        self._reactivated = {}
+        if not os.path.exists(self.path):
+            return
+        with open(self.path, encoding="utf-8-sig", newline="") as f:
+            for r in csv.DictReader(f):
+                xid = (r.get("xml_id") or "").strip()
+                if not xid:
+                    continue
+                row = {k: (r.get(k) or "").strip() for k in FIELDS}
+                row["ner_ids"] = {u for u in row["ner_ids"].split("|") if u}
+                self._rows[xid] = row
+                self._by_key[(row["type"], row["label_norm"])] = xid
+
+    def save(self):
+        tmp = self.path + ".tmp"
+        d = os.path.dirname(self.path)
+        if d:
+            os.makedirs(d, exist_ok=True)
+        with open(tmp, "w", encoding="utf-8", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=FIELDS)
+            w.writeheader()
+            for xid in sorted(self._rows):
+                row = dict(self._rows[xid])
+                row["ner_ids"] = "|".join(sorted(row["ner_ids"]))
+                w.writerow(row)
+        os.replace(tmp, self.path)
+
+    def get(self, typ, label_norm):
+        return self._by_key.get((typ, label_norm))
+
+    def ids(self):
+        return set(self._rows)
+
+    def mark(self, xml_id, status):
+        """Change le statut d'un id. Un id reactive par ce build (sans autre
+        changement) puis remis dans son statut d'origine (supprime / fusionne a
+        nouveau par la curation) retrouve sa date `updated` : pas de bruit dans
+        le diff git d'un fichier commite."""
+        row = self._rows.get(xml_id)
+        if row is None or row["status"] == status:
+            return
+        prev = self._reactivated.pop(xml_id, None)
+        row["status"] = status
+        if prev is not None and prev[0] == status:
+            row["updated"] = prev[1]
+        else:
+            row["updated"] = self.today
+
+    def _touch(self, row, ner_ids):
+        new = set(ner_ids) - row["ner_ids"]
+        if new or row["status"] != "active":
+            if not new:
+                self._reactivated[row["xml_id"]] = (row["status"], row["updated"])
+            row["ner_ids"] |= new
+            row["status"] = "active"
+            row["updated"] = self.today
+        self._claimed.add(row["xml_id"])
+        return row["xml_id"]
+
+    def assign_all(self, items):
+        """Attribue les ids d'un build entier : [(type, label_norm, ner_ids)] ->
+        [xml_id] dans l'ordre d'entree.
+
+        Deux passes (invariant) : 1) toutes les cles exactes sont reclamees
+        d'abord, 2) seulement ensuite le chevauchement d'UUID pour le reste.
+        Ainsi une entite dont la cle n'a pas change garde toujours son id, meme
+        si un autre cluster partage certains de ses UUID."""
+        out = [None] * len(items)
+        for i, (typ, label_norm, ner_ids) in enumerate(items):
+            if typ not in PREFIX:
+                raise ValueError("type d'entite inconnu : %r" % typ)
+            if (typ, label_norm) in self._by_key:
+                out[i] = self.assign(typ, label_norm, ner_ids)
+        for i, (typ, label_norm, ner_ids) in enumerate(items):
+            if out[i] is None:
+                out[i] = self.assign(typ, label_norm, ner_ids)
+        return out
+
+    def assign(self, typ, label_norm, ner_ids):
+        """Id d'une entite (cle exacte, sinon chevauchement d'UUID avec une ligne
+        active non reclamee, sinon nouvel id). Pour un build complet, utiliser
+        assign_all (cles exactes d'abord)."""
+        if typ not in PREFIX:
+            raise ValueError("type d'entite inconnu : %r" % typ)
+        xid = self._by_key.get((typ, label_norm))
+        if xid is not None:
+            # une cle est unique par build : la reclamer deux fois produirait
+            # silencieusement un xml:id duplique dans le registre
+            if xid in self._claimed:
+                raise ValueError("cle (%s, %r) deja attribuee a %s dans ce build"
+                                 % (typ, label_norm, xid))
+            # une ligne supprimee/fusionnee est reactivee : la ligne de
+            # curation qui la vise se reappliquera a la meme entite
+            return self._touch(self._rows[xid], ner_ids)
+        # chevauchement d'UUID NER : meme type, ligne ACTIVE seulement (ne pas
+        # ressusciter un id supprime/fusionne, sa decision viserait une autre
+        # entite), pas encore reclamee dans ce build
+        want = set(ner_ids)
+        best, best_n = None, 0
+        for row in self._rows.values():
+            if (row["type"] != typ or row["status"] != "active"
+                    or row["xml_id"] in self._claimed):
+                continue
+            n = len(want & row["ner_ids"])
+            if n > best_n or (n == best_n and n and row["xml_id"] < best["xml_id"]):
+                best, best_n = row, n
+        if best is not None:
+            del self._by_key[(typ, best["label_norm"])]
+            best["label_norm"] = label_norm
+            best["updated"] = self.today
+            self._by_key[(typ, label_norm)] = best["xml_id"]
+            return self._touch(best, ner_ids)
+        # nouvel id : jamais reutilise -> max de tous les ids existants + 1
+        pre = PREFIX[typ]
+        nums = [int(x[len(pre):]) for x in self._rows
+                if x.startswith(pre) and x[len(pre):].isdigit()]
+        xid = "%s%06d" % (pre, max(nums, default=0) + 1)
+        self._rows[xid] = {"type": typ, "label_norm": label_norm, "xml_id": xid,
+                           "status": "active", "ner_ids": want,
+                           "created": self.today, "updated": self.today}
+        self._by_key[(typ, label_norm)] = xid
+        self._claimed.add(xid)
+        return xid

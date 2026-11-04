@@ -18,10 +18,16 @@ Sorties :
   data/registers/artworks.xml       (pb-artworks, listObject)       [nouveau]
   data/registers/dates.xml          (pb-dates, chronologie)         [nouveau]
   data/registers/id_mapping.csv     (uuid NER -> id registre, pour reecrire les @ref)
+  data/registers/id_registry.csv    (ids stables, jamais reutilises ; env ID_REGISTRY)
+  build/ner/entities_registered.json (clusters apres curation, entree de export_lots)
   build/ner/reconciliation_report.md
 
+Ids stables : scripts/idregistry.py (id_registry.csv). Decisions humaines :
+curation.csv (env CURATION_CSV), reappliquees a chaque build (scripts/curation.py).
+
 Regle de confiance : on ASSERTE le QID Wikidata pour les matchs high/medium
-(avec @cert), on conserve les low comme simple piste de curation (note).
+(avec @cert) et pour les QID valides en curation ("curated", @cert="high") ;
+on conserve les low comme simple piste de curation (note).
 
 stdlib uniquement.
 """
@@ -29,13 +35,19 @@ import csv
 import json
 import os
 import re
+import sys
 import time
 import unicodedata
 import urllib.parse
 import urllib.request
 import urllib.error
 from collections import defaultdict
+from datetime import date
 from xml.sax.saxutils import escape
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from idregistry import IdRegistry  # noqa: E402
+from curation import apply_curation, default_curation_path, load_curation  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Surchargeables par variable d'env (defauts = layout du repo) :
@@ -46,6 +58,15 @@ REG_DIR = os.environ.get("REGISTERS_DIR") or os.path.join(ROOT, "data", "registe
 CLUSTERS = os.path.join(OUT_DIR, "entities_clusters.json")
 RECON = os.path.join(OUT_DIR, "entities_reconciled.json")
 LABELCACHE = os.path.join(OUT_DIR, "wd_labels.json")
+REGISTERED = os.path.join(OUT_DIR, "entities_registered.json")
+ID_REGISTRY = os.environ.get("ID_REGISTRY") or os.path.join(REG_DIR, "id_registry.csv")
+CURATION_CSV = default_curation_path()
+
+PUBLISHER = os.environ.get("CORPUS_PUBLISHER", "Projet Grand Siècle — UNIL / UNIGE")
+LICENCE_STATUS = os.environ.get("CORPUS_LICENCE_STATUS", "free")
+CC_BY = "https://creativecommons.org/licenses/by/4.0/"
+LICENCE_URL = os.environ.get("CORPUS_LICENCE_URL", CC_BY)
+BUILD_DATE = os.environ.get("BUILD_DATE") or date.today().isoformat()
 
 UA = os.environ.get("WIKIDATA_UA") or (
     "tei-entity-reconciliation/1.0 "
@@ -56,7 +77,7 @@ UA = os.environ.get("WIKIDATA_UA") or (
 CORPUS = os.environ.get("CORPUS_NAME", "Grand Siecle")
 API = "https://www.wikidata.org/w/api.php"
 
-ASSERT_CONF = {"high", "medium"}   # niveaux pour lesquels on inscrit le QID
+ASSERT_CONF = {"high", "medium", "curated"}   # niveaux pour lesquels on inscrit le QID
 
 # ----------------- resolution des labels de QID secondaires -----------------
 _lab = {}
@@ -107,6 +128,9 @@ def strip_diac(s):
 def esc(s):
     return escape(s) if s else ""
 
+def esc_attr(s):
+    return escape(s, {'"': "&quot;"}) if s else ""
+
 def date_el(when):
     """<date when=".."/> avec annee paddee a 4 chiffres (ISO ; gere negatif)."""
     if not when:
@@ -118,6 +142,14 @@ def date_el(when):
     y = y.zfill(4)
     return f'{sign}{y}{rest}'
 
+def local_date_el(raw):
+    """Date de l'autorite locale ("1596/03/31", "1629", "15..", "1629?") ->
+    <date when=".."/> si convertible en ISO, sinon <date>texte</date>."""
+    m = re.match(r"^(\d{4})(?:[/-](\d{2})(?:[/-](\d{2}))?)?$", raw.strip())
+    if m:
+        return f'<date when="{"-".join(g for g in m.groups() if g)}"/>'
+    return f'<date>{esc(raw)}</date>'
+
 # ----------------- en-tete TEI commun -----------------
 def header(title, src="Pipeline NER (CamemBERT + GLiNER) + reconciliation Wikidata"):
     return f"""    <teiHeader>
@@ -126,15 +158,15 @@ def header(title, src="Pipeline NER (CamemBERT + GLiNER) + reconciliation Wikida
                 <title>{esc(title)}</title>
             </titleStmt>
             <publicationStmt>
-                <publisher>Projet Grand Siecle — UNIL</publisher>
-                <availability status="restricted"><licence target="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</licence></availability>
+                <publisher>{esc(PUBLISHER)}</publisher>
+                <availability status="{esc_attr(LICENCE_STATUS)}"><licence target="{esc_attr(LICENCE_URL)}">{"CC BY 4.0" if LICENCE_URL == CC_BY else esc(LICENCE_URL)}</licence></availability>
             </publicationStmt>
             <sourceDesc>
                 <p>{esc(src)}</p>
             </sourceDesc>
         </fileDesc>
         <revisionDesc>
-            <change when="2026-06-12">Generation automatique depuis les entites NER reconciliees (scripts/build_registers.py)</change>
+            <change when="{BUILD_DATE}">Generation automatique depuis les entites NER reconciliees (scripts/build_registers.py)</change>
         </revisionDesc>
     </teiHeader>"""
 
@@ -149,24 +181,39 @@ def trace_notes(c, rec):
     out.append(f'        <note type="mentions">{c["mentions"]}</note>')
     if c.get("source_docs"):
         out.append(f'        <note type="sources">{esc("|".join(c["source_docs"]))}</note>')
+    if c.get("cert"):
+        out.append(f'        <note type="ner-confidence">{esc(c["cert"])}</note>')
     if rec and rec.get("match_confidence"):
         out.append(f'        <note type="reconciliation-confidence">{rec["match_confidence"]}</note>')
+    cur = c.get("curation") or {}
+    if cur.get("decision"):
+        resp = f' resp="{esc_attr(cur["qui"])}"' if cur.get("qui") else ""
+        out.append(f'        <note type="curation"{resp}>{esc(cur["decision"])}</note>')
+    if c.get("curation_note") and c["curation_note"] != cur.get("decision"):
+        out.append(f'        <note type="curation">{esc(c["curation_note"])}</note>')
     if rec and rec.get("wikidata_alts"):
         out.append(f'        <note type="wikidata-candidates">{esc("|".join(rec["wikidata_alts"]))}</note>')
     # NB : la tracabilite UUID NER -> id registre vit dans id_mapping.csv (genere
     # plus bas), pas dans une note interne (UUID inutiles a l'affichage, redondants).
     return out
 
-def idnos(rec, extra=()):
+def idnos(c, rec, extra=()):
     out = []
+    wd_isni = False
     if rec and rec.get("wikidata_qid") and rec.get("match_confidence") in ASSERT_CONF:
-        cert = rec["match_confidence"]
+        # @cert TEI : high|medium|low|unknown -> une assertion curee vaut "high"
+        cert = "high" if rec["match_confidence"] == "curated" else rec["match_confidence"]
         out.append(f'        <idno type="wikidata" cert="{cert}">{rec["wikidata_qid"]}</idno>')
         for key, typ in (("viaf", "viaf"), ("isni", "isni"), ("gnd", "gnd"),
                          ("bnf", "bnf"), ("lccn", "lccn"), ("geonames", "geonames"),
                          ("aat", "aat")):
             if key in extra and rec.get(key):
                 out.append(f'        <idno type="{typ}">{esc(str(rec[key]))}</idno>')
+                wd_isni = wd_isni or key == "isni"
+    if c.get("local_id"):
+        out.append(f'        <idno type="local">{esc(c["local_id"])}</idno>')
+    if c.get("isni") and not wd_isni:
+        out.append(f'        <idno type="isni">{esc(c["isni"])}</idno>')
     return out
 
 def _lev(a, b):
@@ -241,7 +288,11 @@ def gen_person(c, rec):
             L.append(f'        <occupation key="{oq}">{esc(lab(oq))}</occupation>')
         for cq in rec.get("citizenship_qids", []):
             L.append(f'        <nationality key="{cq}">{esc(lab(cq))}</nationality>')
-    L += idnos(rec, extra=("viaf", "isni", "gnd", "bnf", "lccn"))
+    else:   # dates de l'autorite locale faute de match Wikidata asserte
+        for tag, key in (("birth", "local_birth"), ("death", "local_death")):
+            if c.get(key):
+                L.append(f'        <{tag}>{local_date_el(c[key])}</{tag}>')
+    L += idnos(c, rec, extra=("viaf", "isni", "gnd", "bnf", "lccn"))
     if rec and rec.get("description") and rec.get("match_confidence") in ASSERT_CONF:
         L.append(f'        <note type="description">{esc(rec["description"])}</note>')
     L += trace_notes(c, rec)
@@ -260,7 +311,7 @@ def gen_place(c, rec):
         L.append(f'        <location><geo>{rec["lat"]:.5f} {rec["lon"]:.5f}</geo></location>')
     if asserted and rec.get("country_qid"):
         L.append(f'        <country key="{rec["country_qid"]}">{esc(lab(rec["country_qid"]))}</country>')
-    L += idnos(rec, extra=("geonames",))
+    L += idnos(c, rec, extra=("geonames",))
     if asserted and rec.get("description"):
         L.append(f'        <note type="description">{esc(rec["description"])}</note>')
     L += trace_notes(c, rec)
@@ -278,7 +329,7 @@ def gen_org(c, rec):
     if asserted and rec.get("inception"):
         d = date_el(rec["inception"])
         if d: L.append(f'        <event type="foundation"><date when="{d}"/></event>')
-    L += idnos(rec, extra=("isni", "viaf", "gnd"))
+    L += idnos(c, rec, extra=("isni", "viaf", "gnd"))
     if asserted and rec.get("description"):
         L.append(f'        <note type="description">{esc(rec["description"])}</note>')
     L += trace_notes(c, rec)
@@ -302,7 +353,7 @@ def gen_work(c, rec):
             L.append(f'        <textLang key="{rec["lang_qid"]}">{esc(lab(rec["lang_qid"]))}</textLang>')
         for gq in rec.get("genre_qids", []):
             L.append(f'        <note type="genre" key="{gq}">{esc(lab(gq))}</note>')
-    L += idnos(rec)
+    L += idnos(c, rec)
     if asserted and rec.get("description"):
         L.append(f'        <note type="description">{esc(rec["description"])}</note>')
     L += trace_notes(c, rec)
@@ -324,7 +375,7 @@ def gen_event(c, rec):
                 if d: L.append(f'        <date {attr}="{d}"/>')
         if rec.get("location_qid"):
             L.append(f'        <placeName key="{rec["location_qid"]}">{esc(lab(rec["location_qid"]))}</placeName>')
-    L += idnos(rec)
+    L += idnos(c, rec)
     if asserted and rec.get("description"):
         L.append(f'        <desc>{esc(rec["description"])}</desc>')
     L += trace_notes(c, rec)
@@ -342,7 +393,7 @@ def gen_object(c, rec):  # artwork
     if asserted:
         for cq in rec.get("class_qids", []):
             L.append(f'        <objectType key="{cq}">{esc(lab(cq))}</objectType>')
-    L += idnos(rec, extra=("aat",))
+    L += idnos(c, rec, extra=("aat",))
     if asserted and rec.get("description"):
         L.append(f'        <note type="description">{esc(rec["description"])}</note>')
     L += trace_notes(c, rec)
@@ -359,7 +410,7 @@ def gen_category(c, rec):  # material / technique -> taxonomy/category
         desc.append(f'          <term type="variant">{esc(v)}</term>')
     desc.append('        </catDesc>')
     L += desc
-    L += idnos(rec, extra=("aat",))
+    L += idnos(c, rec, extra=("aat",))
     if rec and rec.get("description") and rec.get("match_confidence") in ASSERT_CONF:
         L.append(f'        <note type="description">{esc(rec["description"])}</note>')
     L += trace_notes(c, rec)
@@ -433,6 +484,22 @@ TYPES = {
                       title="Chronologie — " + CORPUS, gen=gen_date_item),
 }
 
+_rw = None   # module reconcile_wikidata, importe a la demande
+
+def fetch_record(typ, qid):
+    """Record Wikidata (format reconcile_wikidata.build_record) d'un QID impose
+    en curation ; None en cas d'echec (hors ligne, QID inexistant...)."""
+    global _rw
+    try:
+        if _rw is None:
+            import reconcile_wikidata
+            _rw = reconcile_wikidata
+            _rw.load_cache()
+        e = _rw.wbget([qid]).get(qid)
+        return _rw.build_record(typ, qid, e) if e else None
+    except Exception:
+        return None
+
 def main():
     load_labels()
     clusters = json.load(open(CLUSTERS, encoding="utf-8"))
@@ -441,10 +508,32 @@ def main():
         for r in json.load(open(RECON, encoding="utf-8")):
             recon[(r["type"], r["label_norm"])] = r
 
+    # ids stables : ordre (type, frequence, libelle) -> un registre vierge
+    # numerote comme avant (par frequence) ; ensuite chaque id reste fixe.
+    registry = IdRegistry(ID_REGISTRY, today=BUILD_DATE)
+    registry.load()
+    clusters = sorted(clusters, key=lambda x: (x["type"], -x["mentions"], x["label"].lower()))
+    # assign_all : cles exactes d'abord, chevauchement d'UUID ensuite
+    xmlids = registry.assign_all([(c["type"], c["label_norm"], c["ner_ids"]) for c in clusters])
+    for c, xid in zip(clusters, xmlids):
+        c["xmlid"] = xid
+        c["rec"] = recon.get((c["type"], c["label_norm"]))
+
+    # surcouche de curation (decisions humaines)
+    rows = load_curation(CURATION_CSV)
+    clusters, errors = apply_curation(clusters, rows, registry, fetch_record)
+    for e in errors:
+        print(f"! curation: {e}")
+    if rows:
+        print(f"Curation : {len(rows)} lignes lues, {len(errors)} erreurs")
+    if _rw is not None:
+        _rw.save_cache()
+
     # collecte des QID secondaires a resoudre en labels
     sec = set()
-    for r in recon.values():
-        if r.get("match_confidence") not in ASSERT_CONF:
+    for c in clusters:
+        r = c["rec"]
+        if not r or r.get("match_confidence") not in ASSERT_CONF:
             continue
         for k in ("occupation_qids", "citizenship_qids", "author_qids",
                   "genre_qids", "class_qids", "org_type_qids", "place_type_qids"):
@@ -466,12 +555,10 @@ def main():
 
     for typ, cfg in TYPES.items():
         items = sorted(by_type.get(typ, []), key=lambda x: (-x["mentions"], x["label"].lower()))
-        # numerotation stable par frequence
         n_match = 0
         bodies = []
-        for i, c in enumerate(items, 1):
-            c["xmlid"] = f'{cfg["prefix"]}{i:06d}'
-            rec = recon.get((typ, c["label_norm"]))
+        for c in items:
+            rec = c["rec"]
             if rec and rec.get("wikidata_qid") and rec.get("match_confidence") in ASSERT_CONF:
                 n_match += 1
             bodies.append(cfg["gen"](c, rec))
@@ -493,15 +580,21 @@ def main():
         w.writerows(sorted(mapping))
     print(f"  id_mapping.csv         {len(mapping):5d} correspondances UUID->registre")
 
+    with open(REGISTERED, "w", encoding="utf-8") as f:
+        json.dump(clusters, f, ensure_ascii=False, indent=1)
+    registry.save()
+    print(f"  id_registry.csv        {len(registry.ids()):5d} ids ({ID_REGISTRY})")
+
     # rapport
     write_report(stats, recon, by_type)
     print(f"\nRegistres ecrits dans {REG_DIR}")
 
 def write_report(stats, recon, by_type):
     lines = ["# Rapport de reconciliation NER -> Wikidata\n",
-             f"_Genere le 2026-06-12 par scripts/build_registers.py_\n",
+             f"_Genere le {BUILD_DATE} par scripts/build_registers.py_\n",
              "Le QID Wikidata n'est inscrit dans le registre que pour les matchs "
-             "**high** ou **medium**. Les **low** sont conserves comme piste "
+             "**high** ou **medium**, ou valides en curation (**curated**, "
+             "curation.csv). Les **low** sont conserves comme piste "
              "(`note[@type='wikidata-candidates']`) pour curation manuelle.\n",
              "## Couverture par type\n",
              "| Type | Entites (dedupliquees) | Avec QID Wikidata | Taux |",

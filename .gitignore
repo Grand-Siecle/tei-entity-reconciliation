@@ -3,6 +3,9 @@ data/*.xml
 data/**/*.xml
 data/**/*.csv
 !examples/**
+# Hand-maintained, committed: stable id registry + team curation overlay
+!data/registers/id_registry.csv
+!data/registers/curation.csv
 
 # Intermediate artifacts + Wikidata cache
 build/

@@ -6,7 +6,9 @@
 # 3) regenere les 9 registres + rapport
 set -u
 cd "$(dirname "$0")/.."
-LOG=build/ner/finalize.log
+NER_OUT="${NER_OUT:-build/ner}"
+export NER_OUT
+LOG="$NER_OUT/finalize.log"
 echo "[finalize] $(date) — attente fin reconciliation mentions>=2" > "$LOG"
 
 while pgrep -f "reconcile_wikidata.py --min-mentions 2 *$" >/dev/null 2>&1 \
@@ -22,8 +24,8 @@ echo "[finalize] $(date) — reconciliation principale terminee" >> "$LOG"
 
 # purge les types a re-scorer du fichier resultats (force recalcul avec correctifs)
 python3 - >> "$LOG" 2>&1 <<'PY'
-import json
-f='build/ner/entities_reconciled.json'
+import json, os
+f=os.path.join(os.environ['NER_OUT'],'entities_reconciled.json')
 d=json.load(open(f,encoding='utf-8'))
 keep=[r for r in d if r['type'] not in ('event','material','technique','artwork')]
 json.dump(keep,open(f,'w',encoding='utf-8'),ensure_ascii=False,indent=1)
@@ -36,5 +38,5 @@ python3 scripts/reconcile_wikidata.py --min-mentions 1 --types event,material,te
 echo "[finalize] $(date) — generation des registres" >> "$LOG"
 python3 scripts/build_registers.py >> "$LOG" 2>&1
 
-date > build/ner/FINALIZED
+date > "$NER_OUT/FINALIZED"
 echo "[finalize] $(date) — TERMINE" >> "$LOG"
