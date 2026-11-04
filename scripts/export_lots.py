@@ -11,18 +11,23 @@ et met a jour <NER_OUT>/lots_state.json ({id: {"sig", "exported"}}) pour les
 seules lignes ecrites : `statut` (nouveau|modifié|inchangé) se calcule contre
 cet etat.
 
+Les lots sont edites sur place par les relecteurs : une nouvelle exportation
+ne remplace que les lots listes dans le manifeste precedent pour les types
+reecrits, et refuse (sauf --force) si l'un d'eux a ete modifie depuis son
+ecriture (mtime notee dans <out>/.lots_written.json) ou si un fichier cible
+existe sans figurer au manifeste.
+
 Les colonnes de decision sont pre-remplies depuis curation.csv (CURATION_CSV).
 
 Usage :
   python3 scripts/export_lots.py [--out DIR] [--types person,place]
-      [--min-mentions 2] [--max-rows 500] [--only-new] [--excel]
+      [--min-mentions 2] [--max-rows 500] [--only-new] [--excel] [--force]
 
 stdlib uniquement.
 """
 import argparse
 import csv
 import datetime
-import glob
 import json
 import os
 import re
@@ -48,7 +53,7 @@ CURATION_FIELDS = ["decision", "qid_corrige", "fusion_vers", "label_corrige",
                    "type_corrige", "commentaire", "qui", "date"]
 STATUTS = ["nouveau", "modifié", "inchangé"]
 MANIFEST_COLUMNS = ["file", "type", "rows"] + STATUTS
-LOT_RE = re.compile(r"_lot\d{2,}\.csv$")
+WRITTEN_SIDECAR = ".lots_written.json"
 
 
 def _s(v):
@@ -116,19 +121,76 @@ def _safe(name):
     return re.sub(r"[^A-Za-z0-9_-]+", "_", name) or "untyped"
 
 
-def write_lots(rows, out_dir, max_rows, excel):
+class LotsEditedError(Exception):
+    """A lot listed in the previous manifest was edited after the export."""
+
+
+def _read_manifest(path):
+    if not os.path.exists(path):
+        return []
+    with open(path, encoding="utf-8-sig", newline="") as f:
+        sample = f.read(4096)
+        f.seek(0)
+        try:
+            delim = csv.Sniffer().sniff(sample, delimiters=",;\t").delimiter
+        except csv.Error:
+            delim = ","
+        return [{(k or "").strip(): (v or "").strip() for k, v in r.items()}
+                for r in csv.DictReader(f, delimiter=delim)]
+
+
+def write_lots(rows, out_dir, max_rows, excel, force=False):
     """Write <type>_lotNN.csv files (max_rows each) and lots_manifest.csv.
-    Previous lot files in out_dir are removed first. Returns lot paths."""
+
+    Lots are edited in place by reviewers, so only the files listed in the
+    previous lots_manifest.csv, and only for the types written now, are
+    replaced; lots of other types are kept and stay in the manifest.
+    Raises LotsEditedError (nothing written) when a file to replace was
+    modified after it was written (mtime recorded in .lots_written.json,
+    falling back to the manifest's mtime), or when a target file exists but
+    is not listed in the manifest, unless force=True.
+    Returns the written lot paths."""
     os.makedirs(out_dir, exist_ok=True)
-    for old in glob.glob(os.path.join(out_dir, "*_lot*.csv")):
-        if LOT_RE.search(os.path.basename(old)):
-            os.remove(old)
-    delim, enc = (";", "utf-8-sig") if excel else (",", "utf-8")
+    man_path = os.path.join(out_dir, "lots_manifest.csv")
+    old_manifest = _read_manifest(man_path)
+    man_mtime = os.path.getmtime(man_path) if old_manifest else 0
+    # mtime of each lot right after it was written: the manifest is rewritten
+    # by later exports (other types), so its own mtime is only a fallback.
+    written_path = os.path.join(out_dir, WRITTEN_SIDECAR)
+    written = _load_json(written_path, {})
     max_rows = max(1, int(max_rows))
     by_type = {}
     for r in rows:
         by_type.setdefault(r["type"], []).append(r)
-    paths, manifest = [], []
+    targets = {"%s_lot%02d.csv" % (_safe(typ), n + 1): typ
+               for typ, trows in by_type.items()
+               for n in range((len(trows) + max_rows - 1) // max_rows)}
+    listed = {m.get("file", ""): m for m in old_manifest}
+    to_delete = [f for f, m in listed.items()
+                 if f and m.get("type") in by_type
+                 and os.path.exists(os.path.join(out_dir, f))]
+    if not force:
+        problems = []
+        for f in to_delete:
+            ref = written.get(f, man_mtime)
+            if os.path.getmtime(os.path.join(out_dir, f)) > ref:
+                problems.append("%s modifie apres l'export" % f)
+        for f in targets:
+            if f not in listed and os.path.exists(os.path.join(out_dir, f)):
+                problems.append("%s existe mais n'est pas dans le manifeste" % f)
+        if problems:
+            raise LotsEditedError(
+                "lots non importes dans %s : %s (importer d'abord, ou --force)"
+                % (out_dir, "; ".join(sorted(problems))))
+    for f in to_delete:
+        os.remove(os.path.join(out_dir, f))
+        written.pop(f, None)
+    delim, enc = (";", "utf-8-sig") if excel else (",", "utf-8")
+    paths = []
+    manifest = [{k: m.get(k, "") for k in MANIFEST_COLUMNS}
+                for m in old_manifest
+                if m.get("type") not in by_type and m.get("file")
+                and os.path.exists(os.path.join(out_dir, m["file"]))]
     for typ in sorted(by_type):
         trows = by_type[typ]
         for n, start in enumerate(range(0, len(trows), max_rows), 1):
@@ -140,15 +202,20 @@ def write_lots(rows, out_dir, max_rows, excel):
                 w.writeheader()
                 w.writerows(chunk)
             paths.append(path)
+            written[name] = os.path.getmtime(path)
             m = {"file": name, "type": typ, "rows": len(chunk)}
             for s in STATUTS:
                 m[s] = sum(1 for r in chunk if r.get("statut") == s)
             manifest.append(m)
-    with open(os.path.join(out_dir, "lots_manifest.csv"), "w", encoding=enc,
-              newline="") as f:
+    manifest.sort(key=lambda m: (m["type"], m["file"]))
+    with open(man_path, "w", encoding=enc, newline="") as f:
         w = csv.DictWriter(f, fieldnames=MANIFEST_COLUMNS, delimiter=delim)
         w.writeheader()
         w.writerows(manifest)
+    listed_now = {m["file"] for m in manifest}
+    with open(written_path, "w", encoding="utf-8") as f:
+        json.dump({k: v for k, v in written.items() if k in listed_now}, f,
+                  indent=1, sort_keys=True)
     return paths
 
 
@@ -171,6 +238,8 @@ def main(argv=None):
                     help="n'exporter que les lignes nouveau/modifié")
     ap.add_argument("--excel", action="store_true",
                     help="separateur ';' et BOM utf-8 (Excel FR)")
+    ap.add_argument("--force", action="store_true",
+                    help="remplacer les lots meme s'ils ont ete modifies")
     a = ap.parse_args(argv)
 
     reg_path = os.path.join(OUT_DIR, "entities_registered.json")
@@ -194,7 +263,11 @@ def main(argv=None):
     if a.only_new:
         rows = [r for r in rows if r["statut"] != "inchangé"]
 
-    paths = write_lots(rows, a.out, a.max_rows, a.excel)
+    try:
+        paths = write_lots(rows, a.out, a.max_rows, a.excel, force=a.force)
+    except LotsEditedError as e:
+        print("ERREUR : %s" % e, file=sys.stderr)
+        return 1
 
     today = datetime.date.today().isoformat()
     for r in rows:

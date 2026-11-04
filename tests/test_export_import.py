@@ -139,7 +139,53 @@ class TestExport(Base):
         self.export("--only-new")
         ids = [r["id"] for r in self.lot_rows("person_lot01.csv")]
         self.assertEqual(ids, ["person-000002"])
-        self.assertFalse(os.path.exists(os.path.join(self.out, "place_lot01.csv")))
+        # place has nothing new: its lot from the first export is kept
+        self.assertEqual(len(self.lot_rows("place_lot01.csv")), 1)
+        self.assertEqual([m["file"] for m in self.lot_rows("lots_manifest.csv")],
+                         ["person_lot01.csv", "place_lot01.csv"])
+
+    def test_types_keeps_other_types_lots(self):
+        self.export()
+        self.export("--types", "person")
+        self.assertTrue(os.path.exists(os.path.join(self.out, "place_lot01.csv")))
+        self.assertEqual([m["file"] for m in self.lot_rows("lots_manifest.csv")],
+                         ["person_lot01.csv", "place_lot01.csv"])
+
+    def touch_later(self, name, seconds=10):
+        path = os.path.join(self.out, name)
+        t = os.path.getmtime(path) + seconds
+        os.utime(path, (t, t))
+
+    def test_edited_lot_refused_then_forced(self):
+        self.export("--max-rows", "1")
+        self.touch_later("person_lot02.csv")
+        p = subprocess.run(
+            [sys.executable, os.path.join(SCRIPTS, "export_lots.py"),
+             "--out", self.out, "--max-rows", "1"],
+            env=self.env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            universal_newlines=True)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("person_lot02.csv", p.stderr)
+        self.assertTrue(os.path.exists(os.path.join(self.out, "person_lot02.csv")))
+        self.export("--max-rows", "2", "--force")
+        self.assertFalse(os.path.exists(os.path.join(self.out, "person_lot02.csv")))
+
+    def test_edited_other_type_survives_manifest_rewrite(self):
+        self.export()
+        self.touch_later("place_lot01.csv")
+        self.export("--types", "person")   # rewrites the manifest
+        with self.assertRaises(export_lots.LotsEditedError):
+            export_lots.write_lots(
+                [{"type": "place", "statut": ""}], self.out, 500, False)
+        self.assertTrue(os.path.exists(os.path.join(self.out, "place_lot01.csv")))
+
+    def test_unlisted_target_refused(self):
+        os.makedirs(self.out)
+        with open(os.path.join(self.out, "person_lot01.csv"), "w") as f:
+            f.write("mes notes\n")
+        with self.assertRaises(export_lots.LotsEditedError):
+            export_lots.write_lots(
+                [{"type": "person", "statut": ""}], self.out, 500, False)
 
     def test_split_max_rows(self):
         self.export("--max-rows", "2", "--min-mentions", "1",
@@ -222,13 +268,36 @@ class TestImport(Base):
         for v in ("", "false", "0", "non", None):
             self.assertFalse(import_curation.truthy(v), v)
 
-    def test_decide_explicit_decision_wins(self):
+    def test_decide_explicit_decision_kept_when_qid_final_agrees(self):
         d = import_curation.decide_row({
             "id": "person-000001", "type": "person", "decision": "corriger",
-            "qid_corrige": "Q5", "qid_propose": "Q1", "qid_final": "Q9"})
-        self.assertEqual(d["decision"], "corriger")
-        self.assertEqual(d["qid_corrige"], "Q5")
+            "qid_corrige": "Q5", "qid_propose": "Q1", "qid_final": "Q5"})
+        self.assertEqual((d["decision"], d["qid_corrige"]), ("corriger", "Q5"))
         self.assertEqual(list(d.keys()), curation.COLUMNS)
+        d = import_curation.decide_row({
+            "id": "p", "decision": "corriger", "qid_corrige": "Q5",
+            "qid_propose": "Q1"})
+        self.assertEqual((d["decision"], d["qid_corrige"]), ("corriger", "Q5"))
+
+    def test_decide_qid_final_beats_prefilled_decision(self):
+        d = import_curation.decide_row({
+            "id": "p", "decision": "corriger", "qid_corrige": "Q5",
+            "qid_propose": "Q1", "qid_final": "Q9"})
+        self.assertEqual((d["decision"], d["qid_corrige"]), ("corriger", "Q9"))
+        d = import_curation.decide_row({
+            "id": "p", "decision": "ok", "qid_propose": "Q1",
+            "qid_final": "Q7"})
+        self.assertEqual((d["decision"], d["qid_corrige"]), ("corriger", "Q7"))
+        d = import_curation.decide_row({
+            "id": "p", "decision": "ok", "qid_propose": "Q1",
+            "qid_final": "Q1"})
+        self.assertEqual(d["decision"], "ok")
+
+    def test_decide_qid_final_url(self):
+        d = import_curation.decide_row({
+            "id": "p", "qid_propose": "Q1",
+            "qid_final": "https://www.wikidata.org/wiki/Q42"})
+        self.assertEqual((d["decision"], d["qid_corrige"]), ("corriger", "Q42"))
 
     def test_decide_qid_final_equal_is_ok(self):
         d = import_curation.decide_row({"id": "p", "type": "person",
@@ -240,10 +309,55 @@ class TestImport(Base):
                                         "qid_propose": "Q1", "qid_final": "Q7"})
         self.assertEqual((d["decision"], d["qid_corrige"]), ("corriger", "Q7"))
 
-    def test_decide_qid_final_empty_rejects(self):
-        d = import_curation.decide_row({"id": "p", "type": "person",
+    def test_decide_qid_final_empty_is_no_information(self):
+        self.assertIsNone(import_curation.decide_row(
+            {"id": "p", "type": "person", "qid_propose": "Q1", "qid_final": ""}))
+        d = import_curation.decide_row({"id": "p", "decision": "ok",
                                         "qid_propose": "Q1", "qid_final": ""})
+        self.assertEqual(d["decision"], "ok")
+
+    def test_decide_qid_final_aucun(self):
+        d = import_curation.decide_row({"id": "p", "qid_propose": "Q1",
+                                        "qid_final": "AUCUN"})
         self.assertEqual((d["decision"], d["qid_corrige"]), ("corriger", ""))
+        d = import_curation.decide_row({"id": "p", "qid_propose": "Q1",
+                                        "qid_final": "aucun"})
+        self.assertEqual((d["decision"], d["qid_corrige"]), ("corriger", ""))
+        d = import_curation.decide_row({"id": "p", "decision": "corriger",
+                                        "qid_corrige": "Q5",
+                                        "qid_propose": "Q1",
+                                        "qid_final": "AUCUN"})
+        self.assertEqual((d["decision"], d["qid_corrige"]), ("corriger", ""))
+        # nothing implied: AUCUN brings no information
+        self.assertIsNone(import_curation.decide_row(
+            {"id": "p", "qid_propose": "", "qid_final": "AUCUN"}))
+
+    def test_decide_star_beats_qid_final_and_decision(self):
+        d = import_curation.decide_row({"id": "p", "qid_propose": "Q1",
+                                        "qid_final": "Q1", "starred": "true"})
+        self.assertEqual(d["decision"], "supprimer")
+        d = import_curation.decide_row({"id": "p", "decision": "ok",
+                                        "starred": "true"})
+        self.assertEqual(d["decision"], "supprimer")
+
+    def test_decide_flag_loses_to_qid_final(self):
+        d = import_curation.decide_row({"id": "p", "qid_propose": "Q1",
+                                        "qid_final": "Q1", "flagged": "true"})
+        self.assertEqual(d["decision"], "ok")
+        d = import_curation.decide_row({"id": "p", "qid_propose": "Q1",
+                                        "qid_final": "", "flagged": "true"})
+        self.assertEqual(d["decision"], "doute")
+
+    def test_decide_inferred_corriger_and_fusionner(self):
+        d = import_curation.decide_row({"id": "p", "qid_corrige": "Q5"})
+        self.assertEqual((d["decision"], d["qid_corrige"]), ("corriger", "Q5"))
+        d = import_curation.decide_row({"id": "p", "fusion_vers": "person-000009"})
+        self.assertEqual((d["decision"], d["fusion_vers"]),
+                         ("fusionner", "person-000009"))
+        d = import_curation.decide_row({"id": "p", "decision": "fusionner",
+                                        "fusion_vers": "x", "qid_propose": "Q1",
+                                        "qid_final": "Q7"})
+        self.assertEqual(d["decision"], "fusionner")
 
     def test_decide_star_and_flag(self):
         base = {"id": "p", "type": "person"}
@@ -362,6 +476,21 @@ class TestImport(Base):
         self.assertEqual(cur["person-000001"]["decision"], "ok")
         self.assertEqual(cur["person-000001"]["qui"], "anne")
         self.assertEqual(cur["person-000001"]["source"], "lot.csv")
+
+    def test_cli_label_groups_across_files(self):
+        lot1 = self.write_lot([{"id": "person-000001", "type": "person",
+                                "mentions": "10", "label_corrige": "Loménie"}],
+                              "person_lot01.csv")
+        lot2 = self.write_lot([{"id": "person-000007", "type": "person",
+                                "mentions": "2", "label_corrige": "Lomenie"}],
+                              "person_lot02.csv")
+        self.run_script("import_curation.py", lot1, lot2, "--qui", "anne")
+        cur = curation.load_curation(self.cur)
+        self.assertEqual(cur["person-000007"]["decision"], "fusionner")
+        self.assertEqual(cur["person-000007"]["fusion_vers"], "person-000001")
+        self.assertEqual(cur["person-000007"]["source"], "person_lot02.csv")
+        self.assertEqual(cur["person-000001"]["source"], "person_lot01.csv")
+        self.assertEqual(cur["person-000001"]["label_corrige"], "Loménie")
 
     def test_cli_known_ids_skips_unknown(self):
         reg = os.path.join(self.tmp, "id_registry.csv")

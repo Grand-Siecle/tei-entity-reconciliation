@@ -4,15 +4,22 @@
 Import des decisions de relecture dans curation.csv.
 
 Accepte les lots de export_lots.py edites dans un tableur (separateur
-`,` `;` ou tabulation, BOM accepte) et les exports OpenRefine :
-  - `decision` explicite (ok|corriger|fusionner|supprimer|doute) : prioritaire ;
-  - `qid_final` (colonne « Add entity identifiers column ») :
-      = qid_propose -> ok ; autre QID -> corriger ; vide -> corriger sans QID ;
-  - `supprimer`/`starred` -> supprimer ; `doute`/`flagged` -> doute
-    (vrai = true|1|oui|x|yes|vrai) ;
-  - `label_corrige`/`type_corrige` seuls : ligne gardee, decision vide.
-Les lignes d'un meme type partageant un `label_corrige` non vide sont fusionnees
-dans celle qui a le plus de mentions (sauf decision explicite).
+`,` `;` ou tabulation, BOM accepte) et les exports OpenRefine. Ordre de
+decision (voir decide_row) :
+  1. etoile (`starred`/`supprimer` vrai) ou decision `supprimer` -> supprimer ;
+  2. decision `fusionner` (ou `fusion_vers` rempli sans decision) -> fusionner ;
+  3. `qid_final` (recette OpenRefine : "" = non touche, "AUCUN" = match
+     rejete, QID = match retenu) : "" -> aucune information ; AUCUN ->
+     corriger sans QID si un QID etait implique ; QID different du QID
+     implique -> corriger avec ce QID ; egal a qid_propose sans decision -> ok ;
+  4. decision explicite ok|corriger|doute (qid_corrige seul -> corriger) ;
+  5. drapeau (`flagged`/`doute` vrai) -> doute ;
+  6. `label_corrige`/`type_corrige`/`commentaire` seuls : ligne gardee,
+     decision vide.
+(vrai = true|1|oui|x|yes|vrai)
+Les lignes d'un meme type partageant un `label_corrige` non vide (sur
+l'ensemble des fichiers importes) sont fusionnees dans celle qui a le plus de
+mentions (sauf decision explicite).
 
 Usage :
   python3 scripts/import_curation.py lot1.csv [lot2.csv ...]
@@ -75,42 +82,72 @@ def _qid(v):
 
 
 def _explicit(row):
-    """Decision taken by hand (decision column, star or flag), as opposed to
-    one inferred from qid_final."""
-    return bool((row.get("decision") or "").strip()) or any(
+    """Decision taken by hand in the input row (decision column, fusion_vers,
+    star or flag). Such rows are never turned into `fusionner` by a
+    label_corrige group; rows whose decision only comes from qid_final are."""
+    return bool((row.get("decision") or "").strip()
+                or (row.get("fusion_vers") or "").strip()) or any(
         truthy(row.get(k)) for k in ("supprimer", "starred", "doute", "flagged"))
+
+
+def _decide(row, out):
+    """Decision for one input row, controller ruling order (see module doc)."""
+    g = lambda k: (row.get(k) or "").strip()  # noqa: E731
+    explicit = g("decision").lower()
+    # 1. star / supprimer
+    if explicit == "supprimer" or truthy(row.get("starred")) \
+            or truthy(row.get("supprimer")):
+        return "supprimer"
+    # 2. fusionner
+    if explicit == "fusionner" or (not explicit and out["fusion_vers"]):
+        return "fusionner"
+    # 3. qid_final (OpenRefine: "" untouched, AUCUN rejected, QID matched)
+    if "qid_final" in row:
+        raw = g("qid_final")
+        proposed = _qid(g("qid_propose"))
+        if explicit == "corriger":
+            implied = out["qid_corrige"]
+        elif explicit in ("ok", ""):
+            implied = proposed
+        else:
+            implied = ""
+        final = _qid(raw)
+        if raw.upper() == "AUCUN":
+            if implied:
+                out["qid_corrige"] = ""
+                return "corriger"
+        elif final and final != implied:
+            out["qid_corrige"] = final
+            return "corriger"
+        elif final and final == proposed and not explicit:
+            return "ok"
+    # 4. explicit ok / corriger / doute ; qid_corrige alone -> corriger
+    if explicit in ("ok", "corriger", "doute"):
+        return explicit
+    if out["qid_corrige"]:
+        return "corriger"
+    # 5. flag
+    if truthy(row.get("flagged")) or truthy(row.get("doute")):
+        return "doute"
+    return ""
 
 
 def decide_row(row):
     """Turn one edited lot / OpenRefine row into a curation row (keys =
-    curation.COLUMNS), or None when nothing was decided.
+    curation.COLUMNS), or None when nothing was decided (no decision and no
+    label_corrige / type_corrige / commentaire).
     Raises ValueError on an unknown decision value."""
-    g = lambda k: (row.get(k) or "").strip()  # noqa: E731
     out = dict.fromkeys(curation_mod.COLUMNS, "")
     for k in ("id", "type", "qid_corrige", "fusion_vers", "label_corrige",
               "type_corrige", "commentaire", "qui"):
-        out[k] = g(k)
+        out[k] = (row.get(k) or "").strip()
     if out["qid_corrige"]:
         out["qid_corrige"] = _qid(out["qid_corrige"]) or out["qid_corrige"]
-
-    decision = g("decision").lower()
+    decision = (row.get("decision") or "").strip().lower()
     if decision not in curation_mod.DECISIONS:
         raise ValueError("decision inconnue %r pour %s" % (decision, out["id"]))
-    if not decision and "qid_final" in row:
-        final, proposed = _qid(g("qid_final")), _qid(g("qid_propose"))
-        if final and final == proposed:
-            decision = "ok"
-        elif final:
-            decision, out["qid_corrige"] = "corriger", final
-        elif proposed:
-            decision, out["qid_corrige"] = "corriger", ""
-    if not decision:
-        if truthy(row.get("supprimer")) or truthy(row.get("starred")):
-            decision = "supprimer"
-        elif truthy(row.get("doute")) or truthy(row.get("flagged")):
-            decision = "doute"
-    out["decision"] = decision
-    if decision or out["label_corrige"] or out["type_corrige"] \
+    out["decision"] = _decide(row, out)
+    if out["decision"] or out["label_corrige"] or out["type_corrige"] \
             or out["commentaire"]:
         return out
     return None
@@ -183,10 +220,6 @@ def merge_into_curation(existing, new_rows, source, qui, date):
     return res
 
 
-def _bad_decision(r):
-    return (r.get("decision") or "").strip().lower() not in curation_mod.DECISIONS
-
-
 def load_known_ids(path):
     with open(path, encoding="utf-8-sig", newline="") as f:
         return {(r.get("xml_id") or "").strip() for r in csv.DictReader(f)} - {""}
@@ -211,11 +244,13 @@ def main(argv=None):
     total = Counter()
     errors = 0
 
+    # Rows of all FILES are collected first (a later file wins for the same
+    # id) so label_corrige groups spanning several lots are merged.
+    rows_by_id, source_of, read_count = {}, {}, Counter()
     for path in a.files:
         if not os.path.exists(path):
             print("ERREUR : fichier introuvable : %s" % path, file=sys.stderr)
             return 2
-        rows_in = []
         for r in read_any_csv(path):
             rid = (r.get("id") or "").strip()
             if not rid:
@@ -227,28 +262,39 @@ def main(argv=None):
                     and r["fusion_vers"] not in known:
                 print("AVERTISSEMENT : fusion_vers inconnu %s pour %s"
                       % (r["fusion_vers"], rid))
-            rows_in.append(r)
-        decided = []
-        for r in rows_in:
-            try:
-                d = decide_row(r)
-            except ValueError as e:
-                print("AVERTISSEMENT : %s (%s) ligne ignoree" % (e, path))
-                errors += 1
-                continue
-            if d:
-                decided.append(d)
-        valid = {d["id"] for d in decided} | {
-            r["id"] for r in rows_in if not _bad_decision(r)}
-        decided = merge_label_groups(
-            decided, [r for r in rows_in if r["id"] in valid])
-        cur = merge_into_curation(cur, decided, os.path.basename(path),
+            r["id"] = rid
+            rows_by_id[rid] = r
+            source_of[rid] = path
+            read_count[path] += 1
+
+    rows_in, decided = [], []
+    for rid, r in rows_by_id.items():
+        try:
+            d = decide_row(r)
+        except ValueError as e:
+            print("AVERTISSEMENT : %s (%s) ligne ignoree" % (e, source_of[rid]))
+            errors += 1
+            continue
+        rows_in.append(r)
+        if d:
+            decided.append(d)
+    decided = merge_label_groups(decided, rows_in)
+
+    by_source = {}
+    for d in decided:
+        by_source.setdefault(source_of[d["id"]], []).append(d)
+    for path in a.files:
+        rows = by_source.pop(path, [])
+        if not rows:
+            print("%s : rien (%d ligne(s) lue(s))" % (path, read_count[path]))
+            continue
+        cur = merge_into_curation(cur, rows, os.path.basename(path),
                                   a.qui, today)
-        c = Counter(d["decision"] or "(vide)" for d in decided)
+        c = Counter(d["decision"] or "(vide)" for d in rows)
         total.update(c)
         print("%s : %d ligne(s) retenue(s) sur %d -- %s" % (
-            path, len(decided), len(rows_in),
-            ", ".join("%s: %d" % kv for kv in sorted(c.items())) or "rien"))
+            path, len(rows), read_count[path],
+            ", ".join("%s: %d" % kv for kv in sorted(c.items()))))
 
     changed = sum(1 for k, v in cur.items() if before.get(k) != v)
     print("Total : " + (", ".join("%s: %d" % kv for kv in sorted(total.items()))
