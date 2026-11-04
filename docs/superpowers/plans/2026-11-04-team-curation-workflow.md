@@ -24,11 +24,11 @@
 
 ## Review Focus
 
-1. A TEI file with no `standOff` and no NER `@ref` (real file LIV0004b): extract must count it in “Fichiers traites”, create no entity, no crash; rewrite must leave the file byte-identical. → pinned in Task A (`test_file_without_ner`) and Task E (`test_file_without_standoff_untouched`).
-2. A curation CSV edited in Excel: `;` delimiter, UTF-8 BOM, CRLF, trailing empty columns, ids with surrounding spaces → import parses it and finds the ids. → Task D (`test_read_excel_style_csv`).
-3. Fusion chain `A→B→C` resolves to C; cycle `A→B→A` is reported and both rows skipped without aborting the build. → Task C (`test_resolve_fusions_chain`, `test_resolve_fusions_cycle`).
-4. A cluster whose display label changes between builds (new OCR form wins `best_label`) but shares UUIDs with the previous build keeps its id. → Task C (`test_assign_by_uuid_overlap_when_label_changes`).
-5. `rewrite_refs.py` on a document whose `<standOff>` tag is not alone on its line (minified fixture) still rebuilds the lists correctly, and a second run changes nothing. → Task E (`test_minified_standoff_fallback`, `test_second_pass_noop`).
+1. A TEI file with no `standOff` and no NER `@ref` (real file LIV0004b): extract must count it in “Fichiers traites”, create no entity, no crash; rewrite must leave the file byte-identical. → pinned in Task 1 (`test_file_without_ner`) and Task 5 (`test_file_without_standoff_untouched`).
+2. A curation CSV edited in Excel: `;` delimiter, UTF-8 BOM, CRLF, trailing empty columns, ids with surrounding spaces → import parses it and finds the ids. → Task 4 (`test_read_excel_style_csv`).
+3. Fusion chain `A→B→C` resolves to C; cycle `A→B→A` is reported and both rows skipped without aborting the build. → Task 3 (`test_resolve_fusions_chain`, `test_resolve_fusions_cycle`).
+4. A cluster whose display label changes between builds (new OCR form wins `best_label`) but shares UUIDs with the previous build keeps its id. → Task 3 (`test_assign_by_uuid_overlap_when_label_changes`).
+5. `rewrite_refs.py` on a document whose `<standOff>` tag is not alone on its line (minified fixture) still rebuilds the lists correctly, and a second run changes nothing. → Task 5 (`test_minified_standoff_fallback`, `test_second_pass_noop`).
 
 ---
 
@@ -51,11 +51,11 @@
 | `tests/test_extract.py`, `tests/test_reconcile.py`, `tests/test_idregistry.py`, `tests/test_curation.py`, `tests/test_export_import.py` (new), `tests/test_rewrite_refs.py` (modify), `tests/test_pipeline.sh` (modify), `tests/run_tests.sh` (modify) | tests |
 | `README.md`, `docs/workflow.fr.md` (modify) | docs |
 
-Tasks A, B, C, D, E touch disjoint files and can run in parallel. Task F runs last.
+Tasks 1, 2, 3, 4, 5 touch disjoint files and can run in parallel. Task 6 runs last.
 
 ---
 
-### Task A: extract_entities on real TEI (counting, labels, cert, examples, local authority)
+### Task 1: extract_entities on real TEI (counting, labels, cert, examples, local authority)
 
 **Files:**
 - Modify: `scripts/extract_entities.py`
@@ -142,14 +142,14 @@ git commit -m "feat(extract): count orig mentions only, modern forms, cert, exam
 
 ---
 
-### Task B: reconcile_wikidata — ISNI first, modern label, re-reconcile grown clusters
+### Task 2: reconcile_wikidata — ISNI first, modern label, re-reconcile grown clusters
 
 **Files:**
 - Modify: `scripts/reconcile_wikidata.py`
 - Test: `tests/test_reconcile.py`
 
 **Interfaces:**
-- Consumes: cluster keys from Task A: `isni`, `modern_label`, `mentions`.
+- Consumes: cluster keys from Task 1: `isni`, `modern_label`, `mentions`.
 - Produces: module functions `isni_wd_format(isni:str)->str`, `wbsearch_isni(isni:str)->list[str]`, `select_pending(work:list, done:dict)->list`; record keys `match_method:str` (`"isni"|"search"`). Confidence `"high"` for ISNI matches.
 
 - [ ] **Step 1: Write the failing tests `tests/test_reconcile.py`**
@@ -189,7 +189,7 @@ git commit -m "feat(reconcile): ISNI-first lookup, modern-label query stage, red
 
 ---
 
-### Task C: stable ids + curation overlay in build_registers
+### Task 3: stable ids + curation overlay in build_registers
 
 **Files:**
 - Create: `scripts/idregistry.py`, `scripts/curation.py`
@@ -197,7 +197,7 @@ git commit -m "feat(reconcile): ISNI-first lookup, modern-label query stage, red
 - Test: `tests/test_idregistry.py`, `tests/test_curation.py`
 
 **Interfaces:**
-- Consumes: cluster dicts from Task A (keys `type,label,label_norm,ner_ids,mentions,source_docs,variants,examples,cert,local_id,isni,bnf_ark,local_birth,local_death`); records from `entities_reconciled.json` keyed `(type,label_norm)`.
+- Consumes: cluster dicts from Task 1 (keys `type,label,label_norm,ner_ids,mentions,source_docs,variants,examples,cert,local_id,isni,bnf_ark,local_birth,local_death`); records from `entities_reconciled.json` keyed `(type,label_norm)`.
 - Produces:
   - `scripts/idregistry.py`: `PREFIX:dict[str,str]` (type → id prefix, the nine types), `class IdRegistry(path:str)` with `load()->None`, `save()->None`, `assign(typ:str, label_norm:str, ner_ids:list)->str`, `mark(xml_id:str, status:str)->None`, `get(typ:str,label_norm:str)->str|None`, `ids()->set[str]` (all ids, any status). CSV columns `type,label_norm,xml_id,status,ner_ids,created,updated`; `ner_ids` pipe-joined; dates ISO.
   - `scripts/curation.py`: `COLUMNS` (the 11 spec columns), `DECISIONS`, `load_curation(path)->dict[str,dict]` (`{}` when file missing; keys/values stripped; `decision` lowercased), `save_curation(path, rows:dict)->None` (sorted by id), `resolve_fusions(rows)->tuple[dict[str,str], list[str]]` (id → final target; error strings for cycles/unknown targets/self), `apply_curation(clusters:list[dict], rows:dict, registry:IdRegistry, fetch_record)->tuple[list[dict], list[str]]` where each input cluster already has `xmlid` and `rec` (dict or None) and each output cluster has final `type`, `xmlid`, `label`, merged counts, `rec`, `curation:dict` (`decision,qui,date,commentaire`) and `curation_note:str` (`""|"doute"|"rejected"`). `fetch_record(typ:str, qid:str)->dict|None` is injected (build passes the Wikidata fetcher; tests pass a stub).
@@ -270,14 +270,14 @@ git commit -m "feat(build): stable register ids (id_registry.csv) and curation o
 
 ---
 
-### Task D: export_lots.py and import_curation.py
+### Task 4: export_lots.py and import_curation.py
 
 **Files:**
 - Create: `scripts/export_lots.py`, `scripts/import_curation.py`
 - Test: `tests/test_export_import.py`
 
 **Interfaces:**
-- Consumes: `<NER_OUT>/entities_registered.json` (Task C output: cluster keys from Task A + `xmlid`, `rec`, `curation`), `curation.csv` via `curation.load_curation/save_curation`, `<NER_OUT>/wd_labels.json` (qid → label, may be missing).
+- Consumes: `<NER_OUT>/entities_registered.json` (Task 3 output: cluster keys from Task 1 + `xmlid`, `rec`, `curation`), `curation.csv` via `curation.load_curation/save_curation`, `<NER_OUT>/wd_labels.json` (qid → label, may be missing).
 - Produces:
   - `export_lots.py`: CLI `--out DIR` (default `<NER_OUT>/lots`), `--types t1,t2`, `--min-mentions N` (default 2), `--max-rows N` (default 500), `--only-new`, `--excel` (`;` + `utf-8-sig`); writes `<type>_lotNN.csv` (NN from 01), `lots_manifest.csv` (`file,type,rows,nouveau,modifié,inchangé`), updates `<NER_OUT>/lots_state.json` (`{id: {"sig": str, "exported": iso-date}}`). Functions: `signature(c:dict)->str` (`f"{label}|{qid}|{mentions}"`), `status_for(xmlid:str, sig:str, state:dict)->str`, `build_rows(registered:list, curation:dict, labels:dict)->list[dict]` (one dict per lot column, order per spec), `write_lots(rows, out_dir, max_rows, excel)->list[str]`.
   - `import_curation.py`: CLI `FILES...`, `--curation PATH` (default `CURATION_CSV` env or `data/registers/curation.csv`), `--qui NAME`, `--known-ids PATH` (an `id_registry.csv`; optional), `--dry-run`. Functions: `read_any_csv(path)->list[dict]` (sniff `,`/`;`/tab, `utf-8-sig`, strips keys and values), `truthy(v)->bool`, `decide_row(row:dict)->dict|None` (returns a curation row or None when nothing decided), `merge_label_groups(decided:list[dict], rows_in:list[dict])->list[dict]`, `merge_into_curation(existing:dict, new_rows:list[dict], source:str, qui:str, date:str)->dict`.
@@ -331,7 +331,7 @@ git commit -m "feat: export reviewer lots and import curation decisions (OpenRef
 
 ---
 
-### Task E: issue #1 — rebuild in-document lists in rewrite_refs; validator updates
+### Task 5: issue #1 — rebuild in-document lists in rewrite_refs; validator updates
 
 **Files:**
 - Modify: `scripts/rewrite_refs.py`, `tests/validate_registers.py`, `tests/test_rewrite_refs.py`
@@ -389,7 +389,7 @@ git commit -m "fix(rewrite_refs): rebuild in-document standOff/header lists with
 
 ---
 
-### Task F: wiring, pipeline test, docs
+### Task 6: wiring, pipeline test, docs
 
 **Files:**
 - Modify: `scripts/slim_cache.py`, `scripts/finalize.sh`, `tests/test_pipeline.sh`, `tests/run_tests.sh`, `README.md`, `docs/workflow.fr.md`
