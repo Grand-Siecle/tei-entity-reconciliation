@@ -499,7 +499,7 @@ Tout ce dont un relecteur a besoin est dans [`relecteurs/`](../relecteurs/) :
 - [`relecteurs/README.md`](../relecteurs/README.md) — la marche a suivre en bref ;
 - [`relecteurs/guide_relecteur_openrefine.pdf`](../relecteurs/guide_relecteur_openrefine.pdf)
   — le guide OpenRefine pas a pas, avec captures (source :
-  [`docs/guide_relecteur_openrefine.md`](guide_relecteur_openrefine.md)) ;
+  [`relecteurs/guide_relecteur_openrefine.md`](../relecteurs/guide_relecteur_openrefine.md)) ;
 - les recettes OpenRefine a coller dans *Undo / Redo → Apply* :
   [`relecteurs/recettes/debut_de_lot.json`](../relecteurs/recettes/debut_de_lot.json)
   (debut de lot : reconciliation, colonne `qid_final`) et

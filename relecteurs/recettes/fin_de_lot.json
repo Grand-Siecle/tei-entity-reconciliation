@@ -1,0 +1,54 @@
+[
+  {
+    "op": "core/column-addition",
+    "engineConfig": {
+      "facets": [],
+      "mode": "row-based"
+    },
+    "baseColumnName": "qid_propose",
+    "expression": "grel:if(isNull(cell.recon), \"\", if(isNull(cell.recon.match), \"AUCUN\", cell.recon.match.id))",
+    "onError": "set-to-blank",
+    "newColumnName": "qid_final",
+    "columnInsertIndex": 12,
+    "description": "Crée qid_final : le QID validé, AUCUN si vous avez rejeté la proposition, vide si vous n'avez pas touché la ligne"
+  },
+  {
+    "op": "core/column-addition",
+    "engineConfig": {
+      "facets": [],
+      "mode": "row-based"
+    },
+    "baseColumnName": "id",
+    "expression": "grel:row.starred",
+    "onError": "set-to-blank",
+    "newColumnName": "supprimer",
+    "columnInsertIndex": 1,
+    "description": "Crée supprimer : true pour les lignes marquées d'une étoile (bruit à supprimer)"
+  },
+  {
+    "op": "core/column-addition",
+    "engineConfig": {
+      "facets": [],
+      "mode": "row-based"
+    },
+    "baseColumnName": "id",
+    "expression": "grel:row.flagged",
+    "onError": "set-to-blank",
+    "newColumnName": "doute",
+    "columnInsertIndex": 1,
+    "description": "Crée doute : true pour les lignes marquées d'un drapeau (à discuter en réunion)"
+  },
+  {
+    "op": "core/text-transform",
+    "engineConfig": {
+      "facets": [],
+      "mode": "row-based"
+    },
+    "columnName": "label_corrige",
+    "expression": "grel:if(value == cells[\"label\"].value, \"\", value)",
+    "onError": "keep-original",
+    "repeat": false,
+    "repeatCount": 10,
+    "description": "Vide label_corrige quand le libellé n'a pas été modifié (seules les corrections sont conservées)"
+  }
+]

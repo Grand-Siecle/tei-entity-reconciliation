@@ -1,0 +1,2 @@
+id,type,label,label_moderne,variantes,mentions,nb_docs,docs,cert_ner,exemple_1,exemple_2,qid_propose,label_wikidata,description_wikidata,confiance,candidats,lien_wikidata,local_id,isni,naissance,deces,pays,statut,decision,qid_corrige,fusion_vers,label_corrige,type_corrige,commentaire,qui,date
+place-000001,place,Athenes,,,1,1,sample,,Platon fonda l'Academie a Athenes. Son disciple Aristote commenta le Timee de Platon.,,Q1524,Athènes,ville de l'Attique et capitale de la Grèce,high,Q8558|Q844930|Q3992,https://www.wikidata.org/wiki/Q1524,,,,,Grèce,nouveau,,,,,,,,

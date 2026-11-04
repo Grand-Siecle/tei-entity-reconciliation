@@ -273,7 +273,7 @@ Everything a reviewer needs is in [`relecteurs/`](relecteurs/):
 - [`relecteurs/README.md`](relecteurs/README.md) — what to do, in short;
 - [`relecteurs/guide_relecteur_openrefine.pdf`](relecteurs/guide_relecteur_openrefine.pdf)
   — the step-by-step OpenRefine guide (French, with screenshots; source
-  [`docs/guide_relecteur_openrefine.md`](docs/guide_relecteur_openrefine.md));
+  [`relecteurs/guide_relecteur_openrefine.md`](relecteurs/guide_relecteur_openrefine.md));
 - OpenRefine recipes to paste in *Undo / Redo → Apply*:
   [`relecteurs/recettes/debut_de_lot.json`](relecteurs/recettes/debut_de_lot.json)
   (start of a lot: reconciliation, `qid_final` column) and
