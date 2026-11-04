@@ -171,6 +171,22 @@ def wbsearch(text, lang):
         return []
     return [h["id"] for h in d.get("search", [])]
 
+def isni_wd_format(isni):
+    """ISNI au format Wikidata (P213) : 4 groupes de 4 separes par des espaces."""
+    digits = isni.replace(" ", "")
+    return " ".join(digits[i:i+4] for i in range(0, len(digits), 4))
+
+def wbsearch_isni(isni):
+    """QIDs portant exactement cet ISNI (P213), via CirrusSearch haswbstatement."""
+    digits = isni.replace(" ", "")
+    d = api_get({"action": "query", "list": "search",
+                 "srsearch": f'haswbstatement:"P213={isni_wd_format(isni)}"',
+                 "srnamespace": 0, "srlimit": 3},
+                f"isni::{digits}")
+    if not d:
+        return []
+    return [hit["title"] for hit in d.get("query", {}).get("search", [])]
+
 # champs claims conserves (memes que slim_cache.py) pour limiter la RAM/disque
 _KEEP_PIDS = {
     "P31","P569","P570","P106","P22","P25","P21","P27",
@@ -454,6 +470,24 @@ def reconcile_one(cl):
     nlabel = norm(label)
     m = cl["mentions"]
 
+    # ISNI connu (catalogue) : identifiant d'autorite -> match direct, confiance haute.
+    # Si aucun hit ne passe le filtre de type, on retombe sur la recherche par label.
+    if cl.get("isni"):
+        ids = wbsearch_isni(cl["isni"])
+        ents = wbget(ids) if ids else {}
+        for qid in ids:
+            e = ents.get(qid)
+            if not e:
+                continue
+            pset, p31 = claims_pset(e)
+            if not accept(pset, p31):
+                continue
+            rec = build_record(typ, qid, e)
+            rec["match_confidence"] = "high"
+            rec["match_method"] = "isni"
+            rec["wikidata_sitelinks"] = sitelink_count(e)
+            return rec
+
     clean = clean_query(label)
     forms = []
     for q in (label, clean):
@@ -473,6 +507,10 @@ def reconcile_one(cl):
     # (on ne paie pas 8 appels pour un cluster vu 2 fois). Sortie anticipee des
     # qu'un match confiant est trouve -> entites notables = 2 appels, pas 24.
     stages = [(forms[0], "fr")]
+    # forme modernisee (u/v, i/j...) fournie par l'extraction : 2e requete
+    modern = cl.get("modern_label") or ""
+    if modern and norm(modern) not in {norm(x) for x in forms}:
+        stages.append((modern, "fr"))
     if len(forms) > 1:
         stages.append((forms[1], "fr"))
     stages.append((forms[0], "la"))
@@ -529,6 +567,7 @@ def reconcile_one(cl):
 
     rec = build_record(typ, qid, e)
     rec["match_confidence"] = conf
+    rec["match_method"] = "search"
     rec["wikidata_sitelinks"] = fame
     alts = [q for q in cand if q != qid][:3]
     if alts:
@@ -580,6 +619,18 @@ def build_record(typ, qid, e):
     return {k: v for k, v in rec.items() if v not in (None, [], "")}
 
 # ---------------- main ----------------
+def select_pending(work, done):
+    """Clusters a (re)traiter, dans l'ordre de `work` : absents de `done`, ou deja
+    faits avec <5 mentions et confiance basse/nulle mais passes a >=5 mentions
+    (ils meritent desormais le traitement complet)."""
+    pending = []
+    for cl in work:
+        prev = done.get((cl["type"], cl["label_norm"]))
+        if prev is None or (prev["mentions"] < 5 <= cl["mentions"]
+                            and prev.get("match_confidence") in (None, "low")):
+            pending.append(cl)
+    return pending
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--min-mentions", type=int, default=1)
@@ -607,11 +658,13 @@ def main():
         except Exception:
             done = {}
 
-    pending = [cl for cl in work if (cl["type"], cl["label_norm"]) not in done]
+    pending = select_pending(work, done)
     print(f"Clusters a reconcilier : {len(work)} | deja faits : {len(work)-len(pending)} "
           f"| restants : {len(pending)} (min_mentions={args.min_mentions})", flush=True)
 
-    results = list(done.values())
+    # clusters refaits (grossis) : on retire l'ancien enregistrement
+    redo = {(cl["type"], cl["label_norm"]) for cl in pending}
+    results = [r for k, r in done.items() if k not in redo]
     matched = sum(1 for r in results if r.get("wikidata_qid"))
     rlock = threading.Lock()
     t0 = time.time()
