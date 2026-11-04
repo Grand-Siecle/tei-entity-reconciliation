@@ -19,7 +19,7 @@ Votre travail consiste à **relire ses propositions** dans un tableau, et à dir
 
 | Vous constatez | Vous faites | Le programme comprend |
 |---|---|---|
-| la proposition est bonne | rien | **ok** |
+| la proposition est bonne | rien, si vous relisez tout le lot ; sinon vous la validez (chapitre 6.1) | **ok** (« rien » ne compte comme ok que si vous rendez le lot entier avec `_complet` dans le nom du fichier) |
 | la proposition est fausse mais la bonne fiche existe | vous choisissez la bonne fiche | **corriger** |
 | la proposition est fausse et il n'y a pas de fiche | vous rejetez la proposition | **corriger** sans fiche |
 | ce n'est pas une entité du tout (un mot courant, une erreur de lecture) | vous mettez une **étoile** | **supprimer** |
@@ -79,7 +79,7 @@ OpenRefine connaît Wikidata en anglais. Pour avoir les descriptions en françai
 | **confiance** | `high` quand le programme est sûr, `medium` quand il a un doute, `low` quand c'est une simple piste |
 | **candidats** | d'autres fiches envisagées |
 | **local_id**, **isni** | quand la personne est déjà dans le fichier des personnes du projet (auteurs, imprimeurs, libraires) : ces lignes sont presque toujours bonnes |
-| **statut** | `nouveau` si vous voyez cette ligne pour la première fois, `modifié` si la proposition a changé depuis votre dernière relecture, `inchangé` sinon |
+| **statut** | `nouveau` si vous voyez cette ligne pour la première fois, `modifié` si le libellé ou la proposition a changé depuis le lot précédent, `inchangé` sinon |
 | **decision**, **qid_corrige**, **fusion_vers**, **label_corrige**, **type_corrige**, **commentaire**, **qui**, **date** | les colonnes où vos décisions vont s'inscrire (le plus souvent automatiquement, voir plus loin) |
 
 Le tableau est large. Pour y voir clair, masquez les colonnes dont vous n'avez pas besoin : cliquez sur le triangle de la colonne **Toutes** (tout à gauche), **Masquer / Afficher → Masquer toutes les colonnes**, puis cliquez sur les petits triangles bleus pour faire réapparaître seulement *id*, *label*, *mentions*, *exemple_1*, *qid_propose*, *label_wikidata*, *description_wikidata* et *confiance*. Rien n'est supprimé : les colonnes masquées restent dans le fichier.
@@ -113,13 +113,16 @@ Si l'aperçu ne s'affiche pas, c'est que le service Wikidata en français n'a pa
 
 ## 6. Relire, ligne par ligne
 
-Relisez dans l'ordre du tableau : il est trié des entités les plus fréquentes aux plus rares, et les plus fréquentes sont celles qui comptent le plus pour les index. Si vous manquez de temps, arrêtez-vous quand vous atteignez les lignes à une seule mention : elles seront relues plus tard.
+Relisez dans l'ordre du tableau : il est trié des entités les plus fréquentes aux plus rares, et les plus fréquentes sont celles qui comptent le plus pour les index. Si vous manquez de temps, vous pouvez rendre un lot partiel : arrêtez-vous où vous voulez, mais n'ajoutez pas `_complet` au nom du fichier (chapitre 9). Les lignes que vous n'avez pas relues ne seront pas validées et resteront à relire.
 
 Pour chaque ligne, lisez le **label**, les **exemples** et la **description Wikidata**, et posez-vous une seule question : *est-ce bien de cette personne (ce lieu, cette œuvre…) que parle le texte ?*
 
-### 6.1 La proposition est bonne : ne faites rien
+### 6.1 La proposition est bonne
 
-Passez à la ligne suivante. L'absence de modification sera comprise comme « ok ».
+Deux cas :
+
+- **Vous relisez tout le lot** (vous le rendrez avec `_complet` dans le nom du fichier, chapitre 9) : ne faites rien, passez à la ligne suivante. Une proposition laissée telle quelle sera comprise comme « ok » si sa **confiance** est `high` ou `medium`. Une proposition `low` que vous jugez bonne doit être validée comme ci-dessous.
+- **Vous rendez un lot partiel** (sans `_complet`), ou la confiance est `low` : validez explicitement. Dans la cellule, cliquez sur **Choisir une nouvelle correspondance**, puis cochez la **première** case du candidat proposé (« Apparier cet élément et cette cellule »). La cellule garde la même fiche, mais le programme sait maintenant que c'est vous qui l'avez choisie.
 
 ### 6.2 La proposition est fausse : choisissez la bonne fiche
 
@@ -186,7 +189,7 @@ Attention : cet outil propose, il ne décide pas. Dans l'exemple ci-dessus, il r
 
 ## 9. Finir le lot et le rendre
 
-1. **Recette de fin de lot.** Comme au chapitre 5 : **Défaire / Refaire → Appliquer…**, collez le contenu de `recettes/fin_de_lot.json`, **Suivant »**, **Effectuer les opérations**. La recette ajoute trois colonnes que le programme lira : **qid_final** (la fiche que vous avez validée, `AUCUN` si vous avez rejeté la proposition, vide si vous n'avez pas touché la ligne), **supprimer** (vos étoiles) et **doute** (vos drapeaux). Elle efface aussi les libellés corrigés que vous n'avez pas modifiés.
+1. **Recette de fin de lot.** Comme au chapitre 5 : **Défaire / Refaire → Appliquer…**, collez le contenu de `recettes/fin_de_lot.json`, **Suivant »**, **Effectuer les opérations**. La recette ajoute quatre colonnes que le programme lira : **qid_final** (la fiche retenue : la proposition si vous n'avez rien changé, `AUCUN` si vous avez rejeté la proposition, vide s'il n'y avait pas de proposition), **qid_juge** (comment la fiche a été retenue : `mass` si vous l'avez laissée telle quelle, `single` ou `similar` si vous l'avez choisie vous-même), **supprimer** (vos étoiles) et **doute** (vos drapeaux). Elle efface aussi les libellés corrigés que vous n'avez pas modifiés.
 
 ![La colonne qid_final est calculée par la recette](img/18-colonne-qid-final.png)
 
@@ -194,7 +197,7 @@ Attention : cet outil propose, il ne décide pas. Dans l'exemple ci-dessus, il r
 
 ![Le menu Exporter](img/21-exporter.png)
 
-3. **Renommer et déposer.** Renommez le fichier avec le nom du lot et votre prénom, par exemple `person_lot01_relu_marie.csv`, et déposez-le dans le dossier partagé indiqué par le responsable. N'envoyez pas le fichier par courriel, ne le modifiez plus après l'avoir déposé.
+3. **Renommer et déposer.** Renommez le fichier avec le nom du lot et votre prénom, par exemple `person_lot01_relu_marie.csv`. Si vous avez relu **tout** le lot, ajoutez `_complet` à la fin : `person_lot01_relu_marie_complet.csv` ; sans ce mot, seules les lignes que vous avez validées, corrigées, rejetées, marquées ou regroupées comptent (chapitre 6.1). Déposez-le dans le dossier partagé indiqué par le responsable. N'envoyez pas le fichier par courriel, ne le modifiez plus après l'avoir déposé.
 
 4. Vous pouvez fermer OpenRefine (fermez aussi la fenêtre noire). Votre projet reste enregistré sur votre ordinateur : si le responsable vous renvoie le lot avec de nouvelles lignes, importez le nouveau fichier, ne reprenez pas l'ancien projet.
 

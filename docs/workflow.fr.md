@@ -489,8 +489,8 @@ NER, il ne profiterait donc pas d'une fusion ou d'une suppression decidee ensuit
 
 A l'ajout de documents : les entites existantes gardent leur id, les decisions
 existantes s'appliquent toujours, et l'export suivant marque chaque ligne `nouveau`,
-`modifié` ou `inchangé` (colonne `statut`, calculee contre `build/ner/lots_state.json` ;
-`--only-new` n'exporte que les deux premiers).
+`modifié` (libelle ou QID propose change) ou `inchangé` (colonne `statut`, calculee
+contre `build/ner/lots_state.json` ; `--only-new` n'exporte que les deux premiers).
 
 ### Kit du relecteur
 
@@ -502,9 +502,16 @@ Tout ce dont un relecteur a besoin est dans [`relecteurs/`](../relecteurs/) :
   [`relecteurs/guide_relecteur_openrefine.md`](../relecteurs/guide_relecteur_openrefine.md)) ;
 - les recettes OpenRefine a coller dans *Undo / Redo → Apply* :
   [`relecteurs/recettes/debut_de_lot.json`](../relecteurs/recettes/debut_de_lot.json)
-  (debut de lot : reconciliation, colonne `qid_final`) et
+  (debut de lot : copie `label` dans `label_corrige`, transforme `qid_propose` en
+  correspondances Wikidata) et
   [`relecteurs/recettes/fin_de_lot.json`](../relecteurs/recettes/fin_de_lot.json)
-  (fin de lot, avant l'export CSV).
+  (fin de lot, avant l'export CSV : ajoute `qid_final`, `qid_juge`, `supprimer`,
+  `doute`).
+
+Les relecteurs rendent chaque lot renomme `<lot>_relu_<prenom>.csv`, avec `_complet`
+a la fin (`person_lot01_relu_marie_complet.csv`) quand ils ont relu **tout** le lot :
+c'est seulement dans ce cas qu'une proposition laissee telle quelle vaut `ok` (voir
+les regles d'import ci-dessous).
 
 Un simple tableur convient aussi : remplir les colonnes de decision du lot et
 enregistrer en CSV (separateur `,` `;` ou tabulation, UTF-8 avec ou sans BOM ;
@@ -517,47 +524,67 @@ Colonnes : `id,type,decision,qid_corrige,fusion_vers,label_corrige,type_corrige,
 | `decision` | Effet au build |
 |---|---|
 | *(vide)* | aucune decision ; `label_corrige` / `type_corrige` / `commentaire` s'appliquent quand meme |
-| `ok` | asserte le QID propose quelle que soit sa confiance (confiance `curated`) |
+| `ok` | asserte le QID propose quelle que soit sa confiance (confiance `curated`). `qid_corrige` garde le QID accepte a la relecture (ecrit par l'import) : si la proposition actuelle differe, rien n'est asserte et le build signale `proposition changee depuis la relecture (<ancien> -> <nouveau>)` ; `qid_corrige` vide → la proposition actuelle est assertee |
 | `corriger` | `qid_corrige` rempli → ce QID (proprietes recuperees sur Wikidata), confiance `curated` ; `qid_corrige` vide → aucun QID (`rejected`) |
 | `fusionner` | fusion dans `fusion_vers` (chaines A→B→C resolues, cycles signales et ignores) |
 | `supprimer` | entite retiree des registres ; ses UUID ne sont plus mappes (les refs restent locales) |
-| `doute` | aucun changement, `<note type="curation">doute</note>` sur l'entree |
+| `doute` | aucun changement (seulement la note de curation) |
 
-`label_corrige` (nouveau libelle principal) et `type_corrige` (changement de
-registre) s'appliquent avec n'importe quelle decision. Les erreurs (cible inconnue,
+Toute decision non vide ecrit `<note type="curation" resp="qui">decision</note>` sur
+l'entree (`resp` si `qui` est rempli) ; un `corriger` sans QID ecrit en plus
+`<note type="curation">rejected</note>`. `label_corrige` (nouveau libelle principal)
+et `type_corrige` (changement de registre) s'appliquent avec n'importe quelle
+decision. Les erreurs (cible inconnue,
 cycle...) ne bloquent jamais le build : elles sont signalees.
 
 ### Import : comment une ligne devient une decision
 
 `import_curation.py` lit les lots edites (tableur) et les exports OpenRefine, et
-applique cet ordre :
+applique cet ordre. Le **QID implique** d'une ligne est `qid_corrige` si sa decision
+est `corriger`, sinon `qid_propose`.
 
 1. **etoile** (`starred` / `supprimer` vrai) ou decision `supprimer` → `supprimer` ;
 2. decision `fusionner`, ou `fusion_vers` rempli sans decision → `fusionner` ;
-3. **`qid_final`** (colonne de la recette OpenRefine, QID ou URL Wikidata) : `""` =
-   non touche (aucune information) ; `AUCUN` = match rejete → `corriger` sans QID
-   (si un QID etait implique) ; QID different du QID implique → `corriger` avec ce
-   QID ; egal a `qid_propose` sans decision → `ok` ;
-4. decision explicite `ok` / `corriger` / `doute` (`qid_corrige` seul → `corriger`) ;
-5. **drapeau** (`flagged` / `doute` vrai) → `doute` ;
+3. **drapeau** (`flagged` / `doute` vrai) → `doute` : il l'emporte sur tout `ok`
+   deduit (un `qid_final` different du QID implique est garde dans `qid_corrige`,
+   pour information) ;
+4. **`qid_final`** (colonne de la recette de fin, QID ou URL Wikidata) : `""` =
+   aucune information ; `AUCUN` = match rejete → `corriger` sans QID (si un QID etait
+   implique) ; QID different du QID implique → `corriger` avec ce QID ; egal a
+   `qid_propose` sans decision → `ok` **seulement si le jugement est explicite** :
+   pas de colonne `qid_juge` (tableur), ou `qid_juge` = `single` / `similar` (le
+   relecteur a coche le candidat a la main ; la recette de debut apparie toutes les
+   propositions en masse, `qid_juge` = `mass`), **ou** lot declare complet
+   (`--lot-complet`, ou `complet` dans le nom du fichier) et `confiance` `high` ou
+   `medium` ; sinon aucune decision ;
+5. decision explicite `ok` / `corriger` / `doute` (`qid_corrige` seul → `corriger`) ;
 6. seulement `label_corrige` / `type_corrige` / `commentaire` → ligne gardee,
    decision vide.
 
-(vrai = `true|1|oui|x|yes|vrai`.) Les lignes d'un meme type partageant un
-`label_corrige` non vide (sur l'ensemble des fichiers importes) sont **fusionnees**
-dans celle qui a le plus de mentions (`fusionner` → son id), sauf decision explicite.
-Une nouvelle ligne remplace la ligne de `curation.csv` de meme id ; re-importer tel
-quel un lot pre-rempli garde `qui` / `date` / `source` d'origine. `--known-ids` ignore
-les ids absents de `id_registry.csv`.
+Une ligne `ok` inscrit le QID accepte dans `qid_corrige` (`qid_final`, sinon
+`qid_propose`). (vrai = `true|1|oui|x|yes|vrai`.) Les lignes d'un meme type
+partageant un `label_corrige` non vide (sur l'ensemble des fichiers importes) sont
+**fusionnees** dans celle qui a le plus de mentions (`fusionner` → son id), sauf
+decision explicite ; une ligne au `label_corrige` vide rejoint ce groupe quand son
+propre `label` est egal a ce `label_corrige`. Un id present dans plusieurs fichiers :
+la derniere ligne portant une decision l'emporte (une ligne sans decision ne remplace
+rien) et un avertissement liste ces ids. Une nouvelle ligne remplace **toute** la
+ligne de `curation.csv` de meme id : un fichier de relecteur sans les colonnes
+`label_corrige` / `type_corrige` / `commentaire` efface donc leurs valeurs
+anterieures. Re-importer tel quel un lot pre-rempli garde `qui` / `date` / `source`
+d'origine. `--known-ids` ignore les ids absents de `id_registry.csv`.
 
 ### Garde-fou de l'export
 
 Les relecteurs editent les lots sur place. `export_lots.py` ne remplace donc que les
 lots listes dans le `lots_manifest.csv` precedent et **refuse** (sauf `--force`) si
-l'un d'eux a ete modifie depuis son ecriture (mtime notee dans
-`<out>/.lots_written.json`) ou si un fichier cible existe hors manifeste.
-`.lots_written.json` peut etre supprime sans risque : le controle se rabat alors sur
-la mtime du manifeste (moins fiable).
+l'un d'eux a ete modifie sans avoir ete importe, ou si un fichier cible existe hors
+manifeste. Le controle compare les contenus, pas les dates : l'export note
+l'empreinte sha256 de chaque lot dans `<out>/.lots_written.json`, et
+`import_curation.py` note celle de chaque fichier importe dans le `.lots_written.json`
+du repertoire de ce fichier ; un lot n'est refuse que si son empreinte ne correspond a
+aucune des deux. `.lots_written.json` peut etre supprime sans risque : pour un lot
+sans empreinte, le controle se rabat sur la mtime du manifeste (moins fiable).
 
 ## Checklist
 

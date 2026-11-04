@@ -6,7 +6,7 @@ Tout ce dont un relecteur a besoin pour vérifier les entités du corpus dans Op
 |---|---|
 | [`guide_relecteur_openrefine.pdf`](guide_relecteur_openrefine.pdf) | **Le guide pas à pas**, avec captures d'écran. Commencez par là. (Source : [`guide_relecteur_openrefine.md`](guide_relecteur_openrefine.md)) |
 | [`recettes/debut_de_lot.json`](recettes/debut_de_lot.json) | Recette à coller dans OpenRefine **au début** d'un lot : prépare la colonne `label_corrige` et transforme les propositions en liens Wikidata. |
-| [`recettes/fin_de_lot.json`](recettes/fin_de_lot.json) | Recette à coller **à la fin** d'un lot : calcule les colonnes `qid_final`, `supprimer`, `doute` que le programme lira. |
+| [`recettes/fin_de_lot.json`](recettes/fin_de_lot.json) | Recette à coller **à la fin** d'un lot : calcule les colonnes `qid_final`, `qid_juge`, `supprimer`, `doute` que le programme lira. |
 | [`memo_expressions.md`](memo_expressions.md) | Mémo des filtres, facettes et expressions utiles (GREL, expressions régulières). |
 | [`exemple/`](exemple/) | Un petit lot d'entraînement produit à partir des documents d'exemple du dépôt, pour s'exercer avant le premier vrai lot. |
 | `img/` | Les captures d'écran du guide. |
@@ -21,7 +21,7 @@ Tout ce dont un relecteur a besoin pour vérifier les entités du corpus dans Op
 
 1. Le responsable technique vous envoie un lot (`person_lot01.csv` par exemple).
 2. Vous l'ouvrez dans OpenRefine, vous appliquez la recette de début, vous relisez, vous appliquez la recette de fin, vous exportez en CSV.
-3. Vous déposez le fichier exporté dans le dossier partagé, renommé avec votre prénom.
+3. Vous déposez le fichier exporté dans le dossier partagé, renommé avec votre prénom, et avec `_complet` à la fin si vous avez relu tout le lot (`person_lot01_relu_marie_complet.csv`).
 4. Le responsable importe vos décisions ; au lot suivant, les lignes déjà traitées sont marquées `inchangé`, les nouvelles `nouveau`.
 
 Les règles de décision (quand accepter, corriger, rejeter, fusionner, supprimer) sont au chapitre 10 du guide.

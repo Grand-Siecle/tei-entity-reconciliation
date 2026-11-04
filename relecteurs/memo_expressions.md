@@ -52,6 +52,6 @@ Une case apparaît à gauche. Tapez un mot : seules les lignes dont la colonne c
 ## Les deux recettes, pour mémoire
 
 - **Début de lot** : remplit `label_corrige` avec `label` quand elle est vide, puis **Réconcilier → Utiliser des valeurs comme identifiants…** sur `qid_propose` avec le service *Wikidata reconciliation (fr)*.
-- **Fin de lot** : ajoute `qid_final` = `if(isNull(cell.recon), "", if(isNull(cell.recon.match), "AUCUN", cell.recon.match.id))` à partir de `qid_propose`, `supprimer` = `row.starred`, `doute` = `row.flagged`, puis vide `label_corrige` quand elle est identique à `label`.
+- **Fin de lot** : ajoute `qid_final` = `if(isNull(cell.recon), "", if(isNull(cell.recon.match), "AUCUN", cell.recon.match.id))` à partir de `qid_propose`, `supprimer` = `row.starred`, `doute` = `row.flagged`, `qid_juge` = `if(isNull(cell.recon), "", cell.recon.judgmentAction)` à partir de `qid_propose` (`mass` = proposition laissée telle quelle, `single` ou `similar` = fiche choisie par vous), puis vide `label_corrige` quand elle est identique à `label`.
 
 Si une recette échoue (message d'erreur rouge), vous pouvez faire chaque étape à la main avec les expressions ci-dessus : le résultat est le même.

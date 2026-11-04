@@ -9,7 +9,7 @@ documents already annotated by NER and produces TEI Publisher–ready authority 
 for **9 entity types**: persons, places, organizations, works, events, artworks,
 materials, techniques, and a chronology.
 
-It was extracted from the [Grand Siècle](https://github.com/GrandSiecle) TEI Publisher
+It was extracted from the [Grand Siècle](https://github.com/Grand-Siecle) TEI Publisher
 project to be reusable on any TEI corpus.
 
 ---
@@ -111,13 +111,14 @@ TEI_GLOB="examples/sample/data/sample_reconciled.tei.xml" NER_OUT=build/ner \
 WIKIDATA_CONTACT="you@example.org" NER_OUT=build/ner \
   python3 scripts/reconcile_wikidata.py --types person,place
 
-# 3. build the 9 registers + id_mapping.csv
-NER_OUT=build/ner REGISTERS_DIR=data/registers CORPUS_NAME="My Corpus" \
+# 3. build the 9 registers + id_mapping.csv (in build/demo, so the demo ids never
+#    land in the committed data/registers/id_registry.csv)
+NER_OUT=build/ner REGISTERS_DIR=build/demo CORPUS_NAME="My Corpus" \
   python3 scripts/build_registers.py
 
-# 4. rewrite the document @ref using the mapping
-python3 scripts/rewrite_refs.py --mapping data/registers/id_mapping.csv \
-  examples/sample/data/sample_reconciled.tei.xml
+# 4. rewrite the document @ref using the mapping (into build/demo/rewritten)
+python3 scripts/rewrite_refs.py --mapping build/demo/id_mapping.csv \
+  --out build/demo/rewritten examples/sample/data/sample_reconciled.tei.xml
 ```
 
 On a real corpus, drop your `*_reconciled.tei.xml` files in `data/` and run the four
@@ -200,9 +201,9 @@ the scripts run on any corpus / layout without edits.
 | `ENTITIES_DIR` | extract | `<dir of TEI_GLOB>/entities` | Local authority per document (`<doc>/entities_persons.csv` → `PERSnnnn`) |
 | `PERSONS_CSV` | extract | empty (ignored) | `metadata_personne.csv` (PERS id, ARK, ISNI, names, dates) |
 | `NER_OUT` | extract, reconcile, build, export_lots, slim_cache, finalize | `build/ner` | Intermediate artifacts + cache dir |
-| `REGISTERS_DIR` | build | `data/registers` | Where the 9 registers are written |
+| `REGISTERS_DIR` | build, export_lots, import_curation | `data/registers` | Where the 9 registers are written (and default home of `curation.csv`) |
 | `ID_REGISTRY` | build | `<REGISTERS_DIR>/id_registry.csv` | Stable id registry (committed) |
-| `CURATION_CSV` | build, export_lots, import_curation | `<REGISTERS_DIR>/curation.csv` (export/import: `data/registers/curation.csv`) | Curation overlay (committed) |
+| `CURATION_CSV` | build, export_lots, import_curation | `<REGISTERS_DIR>/curation.csv` | Curation overlay (committed) |
 | `CORPUS_NAME` | build | `Grand Siecle` | Corpus name injected in register titles |
 | `CORPUS_PUBLISHER` | build | `Projet Grand Siècle — UNIL / UNIGE` | `publisher` in the registers' header |
 | `CORPUS_LICENCE_STATUS` | build | `free` | `availability/@status` in the registers' header |
@@ -218,7 +219,7 @@ CLI flags (not env): `reconcile_wikidata.py` takes `--min-mentions`, `--limit`,
 `--types`; `rewrite_refs.py` takes `--mapping`, `--out`, `--dry-run`, `--no-standoff`;
 `export_lots.py` takes `--out`, `--types`, `--min-mentions` (default 2), `--max-rows`
 (default 500), `--only-new`, `--excel`, `--force`; `import_curation.py` takes
-`--curation`, `--qui`, `--known-ids`, `--dry-run`.
+`--curation`, `--qui`, `--known-ids`, `--lot-complet`, `--dry-run`.
 
 > **Wikidata politeness:** always set `WIKIDATA_CONTACT` (or `WIKIDATA_UA`). The WMF
 > policy expects a descriptive User-Agent with a contact; a missing one risks a 403.
@@ -263,8 +264,8 @@ the NER UUIDs, so a later merge or deletion would not reach it.
 
 When documents are added, run the same cycle: existing entities keep their id
 (`id_registry.csv`), existing decisions keep applying (`curation.csv`), and the next
-export marks each lot row as `nouveau`, `modifié` or `inchangé` (`--only-new` exports
-only the first two).
+export marks each lot row as `nouveau`, `modifié` (its label or its proposed QID
+changed) or `inchangé` (`--only-new` exports only the first two).
 
 ### Reviewer kit
 
@@ -276,9 +277,15 @@ Everything a reviewer needs is in [`relecteurs/`](relecteurs/):
   [`relecteurs/guide_relecteur_openrefine.md`](relecteurs/guide_relecteur_openrefine.md));
 - OpenRefine recipes to paste in *Undo / Redo → Apply*:
   [`relecteurs/recettes/debut_de_lot.json`](relecteurs/recettes/debut_de_lot.json)
-  (start of a lot: reconciliation, `qid_final` column) and
+  (start of a lot: copies `label` into `label_corrige`, turns `qid_propose` into
+  Wikidata matches) and
   [`relecteurs/recettes/fin_de_lot.json`](relecteurs/recettes/fin_de_lot.json)
-  (end of a lot, before exporting the CSV).
+  (end of a lot, before exporting the CSV: adds `qid_final`, `qid_juge`, `supprimer`,
+  `doute`).
+
+Reviewers return each lot renamed `<lot>_relu_<name>.csv`, with `_complet` at the end
+(`person_lot01_relu_marie_complet.csv`) when they reviewed the **whole** lot: only
+then does a proposal left as is count as `ok` (see the import rules below).
 
 A plain spreadsheet works too: fill the decision columns of the lot and save as CSV
 (`,`, `;` or tab separator, UTF-8 with or without BOM; `export_lots.py --excel` writes
@@ -291,41 +298,61 @@ Columns: `id,type,decision,qid_corrige,fusion_vers,label_corrige,type_corrige,co
 | `decision` | Effect at build time |
 |---|---|
 | *(empty)* | no decision; `label_corrige` / `type_corrige` / `commentaire` still apply |
-| `ok` | assert the proposed QID whatever its confidence (confidence `curated`) |
+| `ok` | assert the proposed QID whatever its confidence (confidence `curated`). `qid_corrige` holds the QID accepted at review (written by the import): when the current proposal differs, nothing is asserted and the build reports `proposition changee depuis la relecture (<old> -> <new>)`; an empty `qid_corrige` asserts whatever is proposed |
 | `corriger` | `qid_corrige` set → use that QID (its properties are fetched), confidence `curated`; `qid_corrige` empty → no QID (`rejected`) |
 | `fusionner` | merge the entity into `fusion_vers` (chains A→B→C resolved, cycles reported and skipped) |
 | `supprimer` | entity removed from the registers; its UUIDs are no longer mapped (refs stay local) |
-| `doute` | no change, `<note type="curation">doute</note>` on the entry |
+| `doute` | no change (only the curation note) |
 
-`label_corrige` (new main label) and `type_corrige` (move to another register) apply
-with any decision. Errors (unknown target, cycle…) never stop the build: they are
-reported.
+Every non-empty decision writes `<note type="curation" resp="qui">decision</note>` on
+the entry (`resp` when `qui` is set); a `corriger` without QID also writes
+`<note type="curation">rejected</note>`. `label_corrige` (new main label) and
+`type_corrige` (move to another register) apply with any decision. Errors (unknown
+target, cycle…) never stop the build: they are reported.
 
-`import_curation.py` turns each edited row into a curation row, in this order:
+`import_curation.py` turns each edited row into a curation row, in this order. The
+**implied QID** of a row is `qid_corrige` when its decision is `corriger`, otherwise
+`qid_propose`.
 
 1. **star** (`starred` / `supprimer` truthy) or decision `supprimer` → `supprimer`;
 2. decision `fusionner`, or `fusion_vers` filled without a decision → `fusionner`;
-3. **`qid_final`** (OpenRefine column, a QID or a Wikidata URL): `""` = untouched (no
-   information); `AUCUN` = match rejected → `corriger` without QID (when a QID was
-   implied); a QID different from the implied one → `corriger` with that QID; equal to
-   `qid_propose` with no decision → `ok`;
-4. explicit `ok` / `corriger` / `doute` (`qid_corrige` alone → `corriger`);
-5. **flag** (`flagged` / `doute` truthy) → `doute`;
+3. **flag** (`flagged` / `doute` truthy) → `doute`: it beats any inferred `ok` (a
+   `qid_final` different from the implied QID is kept in `qid_corrige`, for
+   information only);
+4. **`qid_final`** (end recipe column, a QID or a Wikidata URL): `""` = no
+   information; `AUCUN` = match rejected → `corriger` without QID (when a QID was
+   implied); a QID different from the implied one → `corriger` with that QID; equal
+   to `qid_propose` with no decision → `ok` **only if the judgement is explicit**:
+   no `qid_juge` column (spreadsheet), or `qid_juge` = `single` / `similar` (the
+   reviewer picked the candidate by hand; the start recipe matches every proposal
+   in mass, `qid_juge` = `mass`), **or** the lot is declared complete
+   (`--lot-complet`, or `complet` in the file name) and `confiance` is `high` or
+   `medium`; otherwise no decision;
+5. explicit `ok` / `corriger` / `doute` (`qid_corrige` alone → `corriger`);
 6. only `label_corrige` / `type_corrige` / `commentaire` → row kept, empty decision.
 
-Truthy = `true|1|oui|x|yes|vrai`. Rows of the same type sharing a non-empty
-`label_corrige` (across all imported files) are **merged** into the one with the most
-mentions (`fusionner` → that id), unless they carry an explicit decision. A new row
-replaces the existing curation row with the same id; re-importing an unchanged
-pre-filled lot keeps the original `qui` / `date` / `source`. `--known-ids` skips ids
-that are not in `id_registry.csv`.
+An `ok` row records the accepted QID in `qid_corrige` (from `qid_final`, else
+`qid_propose`). Truthy = `true|1|oui|x|yes|vrai`. Rows of the same type sharing a
+non-empty `label_corrige` (across all imported files) are **merged** into the one with
+the most mentions (`fusionner` → that id), unless they carry an explicit decision; a
+row with an empty `label_corrige` joins such a group when its own `label` equals the
+group's `label_corrige`. When an id appears in several files, the last row carrying a
+decision wins (a row with nothing decided does not override) and a warning lists those
+ids. A new row replaces the **whole** existing curation row with the same id: a
+reviewer file without the `label_corrige` / `type_corrige` / `commentaire` columns
+therefore clears earlier values of those columns. Re-importing an unchanged pre-filled
+lot keeps the original `qui` / `date` / `source`. `--known-ids` skips ids that are not
+in `id_registry.csv`.
 
 **Lot safety.** Reviewers edit lots in place, so `export_lots.py` only replaces the
 lots listed in the previous `lots_manifest.csv` and **refuses** (unless `--force`) when
-one of them was modified since it was written (mtime recorded in
-`<out>/.lots_written.json`) or when a target file exists outside the manifest. The
-`.lots_written.json` sidecar can be deleted safely; the check then falls back on the
-manifest's mtime (less precise). Export state lives in `<NER_OUT>/lots_state.json`.
+one of them was modified and not imported, or when a target file exists outside the
+manifest. The check compares contents, not dates: the export records the sha256 of
+each lot in `<out>/.lots_written.json`, and `import_curation.py` records the sha256 of
+every file it imports in the `.lots_written.json` of that file's directory; a lot is
+refused only when its hash matches neither. The sidecar can be deleted safely; a lot
+without a recorded hash falls back on the manifest's mtime (less precise). Export
+state lives in `<NER_OUT>/lots_state.json`.
 
 ---
 
